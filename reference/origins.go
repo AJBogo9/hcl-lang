@@ -56,3 +56,55 @@ func (ro Origins) Match(localPath lang.Path, target Target, targetPath lang.Path
 
 	return origins
 }
+
+// MatchResolved is like Match, but it leaves out origins which resolve
+// to a more specific target among allTargets (the targets of targetPath)
+// and only matched this target because it is type-unaware.
+// allTargets is only called when such an origin is found.
+//
+// For example provider "local" {} is a dynamic target which matches
+// local.name_prefix, which resolves to the local value instead.
+func (ro Origins) MatchResolved(localPath lang.Path, target Target, targetPath lang.Path, allTargets func() Targets) Origins {
+	origins := make(Origins, 0)
+
+	for _, refOrigin := range ro.Match(localPath, target, targetPath) {
+		if !originResolvesTo(refOrigin, target, allTargets) {
+			continue
+		}
+		origins = append(origins, refOrigin)
+	}
+
+	return origins
+}
+
+// originResolvesTo reports whether the origin (already known to match
+// target or one of its nested targets) resolves to it, i.e. no other
+// target matches the origin more specifically.
+func originResolvesTo(origin Origin, target Target, allTargets func() Targets) bool {
+	mo, ok := origin.(MatchableOrigin)
+	if !ok {
+		return true
+	}
+	originAddr := mo.Address()
+	n := 0
+	var walk func(t Target)
+	walk = func(t Target) {
+		if !addrCouldPrefix(t.Addr, originAddr) && !addrCouldPrefix(t.LocalAddr, originAddr) {
+			// nested targets extend this address, so none can match
+			return
+		}
+		if t.Matches(mo) {
+			if l := t.matchedAddrLen(mo); l > n {
+				n = l
+			}
+		}
+		for _, nt := range t.NestedTargets {
+			walk(nt)
+		}
+	}
+	walk(target)
+	if n >= len(originAddr) {
+		return true
+	}
+	return !allTargets().hasMoreSpecificMatch(mo, n)
+}

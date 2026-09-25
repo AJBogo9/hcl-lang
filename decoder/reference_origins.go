@@ -21,31 +21,33 @@ func (d *Decoder) ReferenceOriginsTargetingPos(path lang.Path, file string, pos 
 
 	ctx := context.Background()
 
-	localCtx, err := d.pathReader.PathContext(path)
-	if err != nil {
-		return origins
-	}
-
-	targets, ok := localCtx.ReferenceTargets.InnermostAtPos(file, pos)
-	if !ok {
+	// On a reference, these are the targets of that reference,
+	// not the declaration which encloses it.
+	targets, _ := d.SymbolTargetsAtPos(path, file, pos)
+	if len(targets) == 0 {
 		return ReferenceOrigins{}
 	}
 
+	type originKey struct {
+		path lang.Path
+		rng  hcl.Range
+	}
+	seen := make(map[originKey]bool, 0)
 	for _, target := range targets {
-		paths := d.pathReader.Paths(ctx)
-		for _, p := range paths {
-			pathCtx, err := d.pathReader.PathContext(p)
-			if err != nil {
+		for _, origin := range d.OriginsTargeting(ctx, target.Target, target.Path) {
+			rng := origin.Origin.OriginRange()
+			key := originKey{path: origin.Path, rng: rng}
+			if seen[key] {
+				// the same origin can match two targets for the same
+				// symbol, e.g. a block targetable as a type-less
+				// reference and as an object
 				continue
 			}
-
-			rawOrigins := pathCtx.ReferenceOrigins.Match(p, target, path)
-			for _, origin := range rawOrigins {
-				origins = append(origins, ReferenceOrigin{
-					Path:  p,
-					Range: origin.OriginRange(),
-				})
-			}
+			seen[key] = true
+			origins = append(origins, ReferenceOrigin{
+				Path:  origin.Path,
+				Range: rng,
+			})
 		}
 	}
 

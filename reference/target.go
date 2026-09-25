@@ -223,3 +223,19 @@ func (target Target) Matches(origin MatchableOrigin) bool {
 
 	return ((target.LocalAddr.Equals(localOriginAddr) && targetRangeMatches) || target.Addr.Equals(originAddr)) && matchesCons
 }
+
+// matchedAddrLen returns how many leading steps of the origin address
+// the target's address (or local address) covers. It equals the length
+// of the origin address for an exact match and is shorter when a
+// type-unaware target matched a longer address under it.
+func (target Target) matchedAddrLen(origin MatchableOrigin) int {
+	originAddr := origin.Address()
+	n := 0
+	if l := len(target.Addr); l > 0 && l <= len(originAddr) && target.Addr.Equals(originAddr.FirstSteps(uint(l))) {
+		n = l
+	}
+	if l := len(target.LocalAddr); l > n && l <= len(originAddr) && target.LocalAddr.Equals(originAddr.FirstSteps(uint(l))) {
+		n = l
+	}
+	return n
+}

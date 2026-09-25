@@ -26,7 +26,7 @@ func (d *PathDecoder) blockSchemaToCandidate(blockType string, block *schema.Blo
 		// The implementation can certainly be more sophisticated
 		// but it would likely involve changes in snippet placeholder
 		// numbering and full understanding of UX implications.
-		triggerSuggest = block.Labels[0].IsDepKey
+		triggerSuggest = block.Labels[0].IsDepKey && block.Labels[0].Completable
 	}
 
 	return lang.Candidate{

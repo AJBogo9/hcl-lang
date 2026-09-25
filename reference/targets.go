@@ -8,6 +8,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/hashicorp/hcl-lang/lang"
 	"github.com/hashicorp/hcl-lang/schema"
 	"github.com/hashicorp/hcl/v2"
 )
@@ -176,16 +177,71 @@ func posEqual(pos, other hcl.Pos) bool {
 
 func (refs Targets) Match(origin MatchableOrigin) (Targets, bool) {
 	matchingReferences := make(Targets, 0)
+	longest := 0
 
 	refs.deepWalk(func(ref Target) error {
 		if ref.Matches(origin) {
 			matchingReferences = append(matchingReferences, ref)
+			if n := ref.matchedAddrLen(origin); n > longest {
+				longest = n
+			}
 		}
 
 		return nil
 	}, InfiniteDepth)
 
-	return matchingReferences, len(matchingReferences) > 0
+	// An origin resolves to the most specific targets only.
+	// A type-unaware (dynamic) target also matches any longer address
+	// under it, e.g. provider "local" {} matches local.secondary,
+	// which must not win over local.secondary itself.
+	mostSpecific := make(Targets, 0, len(matchingReferences))
+	for _, ref := range matchingReferences {
+		if ref.matchedAddrLen(origin) == longest {
+			mostSpecific = append(mostSpecific, ref)
+		}
+	}
+
+	return mostSpecific, len(mostSpecific) > 0
+}
+
+// hasMoreSpecificMatch reports whether any of the targets
+// matches the origin with an address longer than n steps.
+func (refs Targets) hasMoreSpecificMatch(origin MatchableOrigin, n int) bool {
+	originAddr := origin.Address()
+	for _, ref := range refs {
+		// Nested targets extend the address of their parent, so a
+		// target whose address diverges from the origin's cannot
+		// contain a match. This keeps the walk off the large nested
+		// trees of provider resources.
+		if !addrCouldPrefix(ref.Addr, originAddr) && !addrCouldPrefix(ref.LocalAddr, originAddr) {
+			continue
+		}
+		if ref.Matches(origin) && ref.matchedAddrLen(origin) > n {
+			return true
+		}
+		if ref.NestedTargets.hasMoreSpecificMatch(origin, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// addrCouldPrefix reports whether addr is empty or its steps agree
+// with the leading steps of originAddr.
+func addrCouldPrefix(addr, originAddr lang.Address) bool {
+	if len(addr) == 0 {
+		return true
+	}
+	l := len(addr)
+	if l > len(originAddr) {
+		l = len(originAddr)
+	}
+	for i := 0; i < l; i++ {
+		if addr[i].String() != originAddr[i].String() {
+			return false
+		}
+	}
+	return true
 }
 
 func (refs Targets) OutermostInFile(file string) Targets {
