@@ -125,6 +125,11 @@ func (a Any) semanticTokensForForExpr(ctx context.Context) ([]lang.SemanticToken
 
 		tokens = append(tokens, newExpression(a.pathCtx, eType.CollExpr, a.cons).SemanticTokens(ctx)...)
 
+		if a.pathCtx.SemanticHighlighting != nil {
+			// references to the iterator symbols are not resources
+			ctx = forExprScope(ctx, eType)
+		}
+
 		if eType.KeyExpr != nil {
 			typ, ok := iterableKeyType(a.cons.OfType)
 			if !ok {

@@ -22,6 +22,10 @@ type PathContext struct {
 	Files            map[string]*hcl.File
 	Functions        map[string]schema.FunctionSignature
 	Validators       []validator.Validator
+
+	// SemanticHighlighting enables kind-aware semantic tokens.
+	// See schema.SemanticHighlighting. Nil keeps the original tokens.
+	SemanticHighlighting *schema.SemanticHighlighting
 }
 
 type pathCtxKey struct{}

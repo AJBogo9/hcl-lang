@@ -46,23 +46,34 @@ func (d *PathDecoder) SemanticTokensInFile(ctx context.Context, filename string)
 	return tokens, nil
 }
 
+type dynamicBodyCtxKey struct{}
+
 func (d *PathDecoder) tokensForBody(ctx context.Context, body *hclsyntax.Body, bodySchema *schema.BodySchema, parentModifiers []lang.SemanticTokenModifier) []lang.SemanticToken {
 	tokens := make([]lang.SemanticToken, 0)
 
 	if bodySchema == nil {
-		return tokens
+		return d.syntaxTokensForBody(ctx, body)
 	}
 
+	sh := d.pathCtx.SemanticHighlighting
+	// the body of a dynamic block has meta-arguments (for_each, iterator, labels)
+	dynamicBody, _ := ctx.Value(dynamicBodyCtxKey{}).(*hclsyntax.Body)
+	isDynamicBody := dynamicBody != nil && dynamicBody == body
+
 	for name, attr := range body.Attributes {
+		isMetaArgument := isDynamicBody
 		attrSchema, ok := bodySchema.Attributes[name]
 		if !ok {
 			if bodySchema.Extensions != nil && name == "count" && bodySchema.Extensions.Count {
 				attrSchema = schemahelper.CountAttributeSchema()
+				isMetaArgument = true
 			} else if bodySchema.Extensions != nil && name == "for_each" && bodySchema.Extensions.ForEach {
 				attrSchema = schemahelper.ForEachAttributeSchema()
+				isMetaArgument = true
 			} else {
 				if bodySchema.AnyAttribute == nil {
 					// unknown attribute
+					tokens = append(tokens, syntaxSemanticTokens(ctx, d.pathCtx, attr.Expr)...)
 					continue
 				}
 				attrSchema = bodySchema.AnyAttribute
@@ -72,6 +83,9 @@ func (d *PathDecoder) tokensForBody(ctx context.Context, body *hclsyntax.Body, b
 		attrModifiers := make([]lang.SemanticTokenModifier, 0)
 		attrModifiers = append(attrModifiers, parentModifiers...)
 		attrModifiers = append(attrModifiers, attrSchema.SemanticTokenModifiers...)
+		if sh != nil && isMetaArgument {
+			attrModifiers = append(attrModifiers, lang.TokenModifierMetaArgument)
+		}
 
 		tokens = append(tokens, lang.SemanticToken{
 			Type:      lang.TokenAttrName,
@@ -79,13 +93,18 @@ func (d *PathDecoder) tokensForBody(ctx context.Context, body *hclsyntax.Body, b
 			Range:     attr.NameRange,
 		})
 
-		tokens = append(tokens, d.newExpression(attr.Expr, attrSchema.Constraint).SemanticTokens(ctx)...)
+		exprTokens := d.newExpression(attr.Expr, attrSchema.Constraint).SemanticTokens(ctx)
+		if sh != nil && constraintAllowsReferences(attrSchema.Constraint) {
+			exprTokens = mergeSyntaxTokens(exprTokens, syntaxSemanticTokens(ctx, d.pathCtx, attr.Expr))
+		}
+		tokens = append(tokens, exprTokens...)
 	}
 
 	for _, block := range body.Blocks {
 		blockSchema, hasDepSchema := bodySchema.Blocks[block.Type]
 		if !hasDepSchema {
 			// unknown block
+			tokens = append(tokens, d.syntaxTokensForBody(ctx, block.Body)...)
 			continue
 		}
 
@@ -93,9 +112,24 @@ func (d *PathDecoder) tokensForBody(ctx context.Context, body *hclsyntax.Body, b
 		blockModifiers = append(blockModifiers, parentModifiers...)
 		blockModifiers = append(blockModifiers, blockSchema.SemanticTokenModifiers...)
 
+		blockCtx := ctx
+		blockTypeModifiers := blockModifiers
+		isDynamicBlock := sh != nil && block.Type == "dynamic" &&
+			bodySchema.Extensions != nil && bodySchema.Extensions.DynamicBlocks
+		if isDynamicBlock {
+			// only the dynamic keyword itself is a meta-argument,
+			// the content block within is ordinary configuration
+			blockTypeModifiers = append(blockModifiers[:len(blockModifiers):len(blockModifiers)], lang.TokenModifierMetaArgument)
+
+			var iterTokens []lang.SemanticToken
+			blockCtx, iterTokens = d.dynamicBlockIterator(ctx, block)
+			tokens = append(tokens, iterTokens...)
+			blockCtx = context.WithValue(blockCtx, dynamicBodyCtxKey{}, block.Body)
+		}
+
 		tokens = append(tokens, lang.SemanticToken{
 			Type:      lang.TokenBlockType,
-			Modifiers: blockModifiers,
+			Modifiers: blockTypeModifiers,
 			Range:     block.TypeRange,
 		})
 
@@ -122,7 +156,7 @@ func (d *PathDecoder) tokensForBody(ctx context.Context, body *hclsyntax.Body, b
 		if block.Body != nil {
 			mergedSchema, _ := schemahelper.MergeBlockBodySchemas(block.AsHCLBlock(), blockSchema)
 
-			tokens = append(tokens, d.tokensForBody(ctx, block.Body, mergedSchema, blockModifiers)...)
+			tokens = append(tokens, d.tokensForBody(blockCtx, block.Body, mergedSchema, blockModifiers)...)
 		}
 	}
 
