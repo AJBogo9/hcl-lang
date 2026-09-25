@@ -334,13 +334,18 @@ func referenceAsTypeOf(block *hcl.Block, rngPtr *hcl.Range, bSchema *schema.Bloc
 		ref.Description = bSchema.Body.Description
 	}
 
-	attrs, diags := block.Body.JustAttributes()
-	if diags.HasErrors() {
-		return reference.Targets{ref}
-	}
-
 	if bSchema.Address.AsTypeOf.AttributeExpr != "" {
-		typeDecl, ok := asTypeOfAttrExpr(attrs, bSchema)
+		// PartialContent, unlike JustAttributes, tolerates nested blocks,
+		// such as the validation blocks of a variable.
+		content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+			Attributes: []hcl.AttributeSchema{
+				{Name: bSchema.Address.AsTypeOf.AttributeExpr},
+			},
+		})
+		if diags.HasErrors() {
+			return reference.Targets{ref}
+		}
+		typeDecl, ok := asTypeOfAttrExpr(content.Attributes, bSchema)
 		if !ok {
 			// nothing to fall back to, exit early
 			return reference.Targets{ref}
@@ -364,8 +369,8 @@ func asTypeOfAttrExpr(attrs hcl.Attributes, bSchema *schema.BlockSchema) (cty.Ty
 		return cty.DynamicPseudoType, false
 	}
 
-	// TODO: TypeConstraintWithDefaults
-	typeDecl, diags := typeexpr.TypeConstraint(attr.Expr)
+	// TypeConstraintWithDefaults also accepts optional object attributes.
+	typeDecl, _, diags := typeexpr.TypeConstraintWithDefaults(attr.Expr)
 	if diags.HasErrors() {
 		return cty.DynamicPseudoType, false
 	}

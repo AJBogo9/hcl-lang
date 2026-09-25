@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/hashicorp/hcl-lang/lang"
+	"github.com/hashicorp/hcl-lang/schema"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 )
@@ -34,6 +35,15 @@ func (d *Decoder) Path(path lang.Path) (*PathDecoder, error) {
 		decoderCtx:    d.ctx,
 		maxCandidates: 100,
 	}, err
+}
+
+// Schema returns the body schema the path is decoded with, or nil when
+// none is known.
+func (d *PathDecoder) Schema() *schema.BodySchema {
+	if d.pathCtx == nil {
+		return nil
+	}
+	return d.pathCtx.Schema
 }
 
 func (d *PathDecoder) bytesForFile(file string) ([]byte, error) {
