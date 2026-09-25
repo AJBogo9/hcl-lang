@@ -7,7 +7,9 @@ import (
 	"context"
 
 	"github.com/hashicorp/hcl-lang/lang"
+	"github.com/hashicorp/hcl-lang/schema"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
+	"github.com/zclconf/go-cty/cty"
 )
 
 func (td TypeDeclaration) SemanticTokens(ctx context.Context) []lang.SemanticToken {
@@ -94,6 +96,11 @@ func (td TypeDeclaration) objectSemanticTokens(ctx context.Context, funcExpr *hc
 			Range:     item.KeyExpr.Range(),
 		})
 
+		if optTokens, ok := td.optionalAttributeSemanticTokens(ctx, item.ValueExpr); ok {
+			tokens = append(tokens, optTokens...)
+			continue
+		}
+
 		cons := TypeDeclaration{
 			expr:    item.ValueExpr,
 			pathCtx: td.pathCtx,
@@ -102,6 +109,40 @@ func (td TypeDeclaration) objectSemanticTokens(ctx context.Context, funcExpr *hc
 	}
 
 	return tokens
+}
+
+// optionalAttributeSemanticTokens returns tokens for an optional object
+// attribute, optional(type) or optional(type, default), when kind-aware
+// highlighting is enabled.
+func (td TypeDeclaration) optionalAttributeSemanticTokens(ctx context.Context, expr hclsyntax.Expression) ([]lang.SemanticToken, bool) {
+	funcExpr, ok := expr.(*hclsyntax.FunctionCallExpr)
+	if !ok || funcExpr.Name != "optional" || td.pathCtx.SemanticHighlighting == nil {
+		return nil, false
+	}
+	if len(funcExpr.Args) < 1 || len(funcExpr.Args) > 2 {
+		return nil, false
+	}
+
+	tokens := []lang.SemanticToken{
+		{
+			Type:      lang.TokenTypeComplex,
+			Modifiers: []lang.SemanticTokenModifier{},
+			Range:     funcExpr.NameRange,
+		},
+	}
+	typeCons := TypeDeclaration{
+		expr:    funcExpr.Args[0],
+		pathCtx: td.pathCtx,
+	}
+	tokens = append(tokens, typeCons.SemanticTokens(ctx)...)
+
+	if len(funcExpr.Args) == 2 {
+		// the default value is an ordinary expression
+		defaultCons := schema.AnyExpression{OfType: cty.DynamicPseudoType}
+		tokens = append(tokens, newExpression(td.pathCtx, funcExpr.Args[1], defaultCons).SemanticTokens(ctx)...)
+	}
+
+	return tokens, true
 }
 
 func (td TypeDeclaration) tupleSemanticTokens(ctx context.Context, funcExpr *hclsyntax.FunctionCallExpr) []lang.SemanticToken {

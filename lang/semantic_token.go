@@ -68,4 +68,36 @@ func (stm SemanticTokenModifiers) Copy() SemanticTokenModifiers {
 
 const (
 	TokenModifierDependent = SemanticTokenModifier("hcl-dependent")
+
+	// TokenModifierMetaArgument marks an attribute or a block which controls
+	// how its parent block is evaluated (e.g. count, for_each, dynamic)
+	// rather than passing data to it.
+	TokenModifierMetaArgument = SemanticTokenModifier("hcl-metaArgument")
+
+	// Roles of a step within a reference (traversal), reported alongside
+	// the modifiers of the reference kind (see schema.ReferenceKind).
+
+	// TokenModifierKeywordStep marks a fixed keyword step which selects
+	// the kind of the reference (e.g. var in var.name).
+	TokenModifierKeywordStep = SemanticTokenModifier("hcl-keywordStep")
+	// TokenModifierTypeStep marks a step naming the type of the referenced
+	// object (e.g. aws_instance in aws_instance.name).
+	TokenModifierTypeStep = SemanticTokenModifier("hcl-typeStep")
+	// TokenModifierNameStep marks a step naming the referenced object
+	// (e.g. name in var.name).
+	TokenModifierNameStep = SemanticTokenModifier("hcl-nameStep")
+	// TokenModifierAttrStep marks a step selecting an attribute of the
+	// referenced object (e.g. id in aws_instance.name.id).
+	TokenModifierAttrStep = SemanticTokenModifier("hcl-attrStep")
 )
+
+// SupportedSemanticTokenModifiers lists every modifier reported by hcl-lang
+// itself (as opposed to schema-defined modifiers).
+var SupportedSemanticTokenModifiers = SemanticTokenModifiers{
+	TokenModifierDependent,
+	TokenModifierMetaArgument,
+	TokenModifierKeywordStep,
+	TokenModifierTypeStep,
+	TokenModifierNameStep,
+	TokenModifierAttrStep,
+}
