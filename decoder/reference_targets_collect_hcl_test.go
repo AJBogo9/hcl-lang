@@ -3798,6 +3798,146 @@ provider "test" {
 			},
 		},
 		{
+			"block as data type per attribute - type with a validation block",
+			&schema.BodySchema{
+				Blocks: map[string]*schema.BlockSchema{
+					"variable": {
+						Labels: []*schema.LabelSchema{
+							{Name: "name"},
+						},
+						Address: &schema.BlockAddrSchema{
+							Steps: []schema.AddrStep{
+								schema.LabelStep{Index: 0},
+							},
+							AsTypeOf: &schema.BlockAsTypeOf{
+								AttributeExpr: "type",
+							},
+						},
+						Type: schema.BlockTypeObject,
+						Body: &schema.BodySchema{
+							Attributes: map[string]*schema.AttributeSchema{
+								"type": {
+									IsOptional: true,
+									Constraint: schema.TypeDeclaration{},
+								},
+							},
+						},
+					},
+				},
+			},
+			`variable "test" {
+  type = string
+
+  validation {
+    condition = true
+  }
+}
+`,
+			reference.Targets{
+				{
+					Addr: lang.Address{
+						lang.RootStep{Name: "test"},
+					},
+					Type: cty.String,
+					RangePtr: &hcl.Range{
+						Filename: "test.tf",
+						Start: hcl.Pos{
+							Line:   1,
+							Column: 1,
+							Byte:   0,
+						},
+						End: hcl.Pos{
+							Line:   7,
+							Column: 2,
+							Byte:   76,
+						},
+					},
+					DefRangePtr: &hcl.Range{
+						Filename: "test.tf",
+						Start: hcl.Pos{
+							Line:   1,
+							Column: 1,
+							Byte:   0,
+						},
+						End: hcl.Pos{
+							Line:   1,
+							Column: 16,
+							Byte:   15,
+						},
+					},
+				},
+			},
+		},
+		{
+			"block as data type per attribute - type with an optional attribute",
+			&schema.BodySchema{
+				Blocks: map[string]*schema.BlockSchema{
+					"variable": {
+						Labels: []*schema.LabelSchema{
+							{Name: "name"},
+						},
+						Address: &schema.BlockAddrSchema{
+							Steps: []schema.AddrStep{
+								schema.LabelStep{Index: 0},
+							},
+							AsTypeOf: &schema.BlockAsTypeOf{
+								AttributeExpr: "type",
+							},
+						},
+						Type: schema.BlockTypeObject,
+						Body: &schema.BodySchema{
+							Attributes: map[string]*schema.AttributeSchema{
+								"type": {
+									IsOptional: true,
+									Constraint: schema.TypeDeclaration{},
+								},
+							},
+						},
+					},
+				},
+			},
+			`variable "test" {
+  type = object({
+    a = optional(string, "x")
+  })
+}
+`,
+			reference.Targets{
+				{
+					Addr: lang.Address{
+						lang.RootStep{Name: "test"},
+					},
+					Type: cty.ObjectWithOptionalAttrs(map[string]cty.Type{"a": cty.String}, []string{"a"}),
+					RangePtr: &hcl.Range{
+						Filename: "test.tf",
+						Start: hcl.Pos{
+							Line:   1,
+							Column: 1,
+							Byte:   0,
+						},
+						End: hcl.Pos{
+							Line:   5,
+							Column: 2,
+							Byte:   72,
+						},
+					},
+					DefRangePtr: &hcl.Range{
+						Filename: "test.tf",
+						Start: hcl.Pos{
+							Line:   1,
+							Column: 1,
+							Byte:   0,
+						},
+						End: hcl.Pos{
+							Line:   1,
+							Column: 16,
+							Byte:   15,
+						},
+					},
+				},
+			},
+		},
+		{
 			"block as data type per attribute - default tuple constant",
 			&schema.BodySchema{
 				Blocks: map[string]*schema.BlockSchema{
