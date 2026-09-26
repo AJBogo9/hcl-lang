@@ -308,3 +308,58 @@ func TestCompletionAtPos_exprReference(t *testing.T) {
 		})
 	}
 }
+
+// A top-level attribute, such as inputs in a Terragrunt file, completes
+// references to what the file declares elsewhere, but not to itself.
+func TestCompletionAtPos_exprReference_topLevelAttribute(t *testing.T) {
+	cfg := `locals {
+  region = "x"
+}
+inputs = local.
+other = 1
+`
+	rangeOf := func(start, end hcl.Pos) *hcl.Range {
+		return &hcl.Range{Filename: "test.tf", Start: start, End: end}
+	}
+	targets := reference.Targets{
+		{
+			Addr:     lang.Address{lang.RootStep{Name: "local"}, lang.AttrStep{Name: "region"}},
+			Type:     cty.String,
+			RangePtr: rangeOf(hcl.Pos{Line: 2, Column: 3, Byte: 11}, hcl.Pos{Line: 2, Column: 15, Byte: 23}),
+		},
+		{
+			// declared by the attribute being completed
+			Addr:     lang.Address{lang.RootStep{Name: "local"}, lang.AttrStep{Name: "self"}},
+			Type:     cty.String,
+			RangePtr: rangeOf(hcl.Pos{Line: 4, Column: 1, Byte: 26}, hcl.Pos{Line: 4, Column: 16, Byte: 41}),
+		},
+	}
+	bodySchema := &schema.BodySchema{
+		Blocks: map[string]*schema.BlockSchema{
+			"locals": {Body: &schema.BodySchema{AnyAttribute: &schema.AttributeSchema{Constraint: schema.AnyExpression{OfType: cty.DynamicPseudoType}}}},
+		},
+		Attributes: map[string]*schema.AttributeSchema{
+			"inputs": {Constraint: schema.AnyExpression{OfType: cty.DynamicPseudoType}, IsOptional: true},
+			"other":  {Constraint: schema.AnyExpression{OfType: cty.Number}, IsOptional: true},
+		},
+	}
+
+	f, _ := hclsyntax.ParseConfig([]byte(cfg), "test.tf", hcl.InitialPos)
+	d := testPathDecoder(t, &PathContext{
+		Schema:           bodySchema,
+		Files:            map[string]*hcl.File{"test.tf": f},
+		ReferenceTargets: targets,
+	})
+
+	candidates, err := d.CompletionAtPos(context.Background(), "test.tf", hcl.Pos{Line: 4, Column: 16, Byte: 41})
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels := make([]string, 0)
+	for _, c := range candidates.List {
+		labels = append(labels, c.Label)
+	}
+	if diff := cmp.Diff([]string{"local.region"}, labels); diff != "" {
+		t.Fatalf("unexpected candidates: %s", diff)
+	}
+}
