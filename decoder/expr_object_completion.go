@@ -142,7 +142,7 @@ func (obj Object) CompletionAtPos(ctx context.Context, pos hcl.Pos) []lang.Candi
 
 			cons := newExpression(obj.pathCtx, item.ValueExpr, aSchema.Constraint)
 
-			return cons.CompletionAtPos(ctx, pos)
+			return append(nestedHookCandidates(ctx, item.ValueExpr, aSchema, pos), cons.CompletionAtPos(ctx, pos)...)
 		}
 	}
 
@@ -207,7 +207,7 @@ func (obj Object) CompletionAtPos(ctx context.Context, pos hcl.Pos) []lang.Candi
 
 		cons := newExpression(obj.pathCtx, emptyExpr, aSchema.Constraint)
 
-		return cons.CompletionAtPos(ctx, pos)
+		return append(nestedHookCandidates(ctx, emptyExpr, aSchema, pos), cons.CompletionAtPos(ctx, pos)...)
 	}
 
 	prefix := string(bytes.TrimFunc(trimmedBytes, func(r rune) bool {

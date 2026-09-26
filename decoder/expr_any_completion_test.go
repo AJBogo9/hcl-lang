@@ -1121,13 +1121,74 @@ func TestCompletionAtPos_exprAny_functions(t *testing.T) {
 					Description: lang.Markdown("Example for hcl valid namespaced function"),
 					Detail:      "namespaced::function() bool",
 					Kind:        lang.FunctionCandidateKind,
+					// the call keeps its parentheses and arguments
 					TextEdit: lang.TextEdit{
-						NewText: "namespaced::function()",
-						Snippet: "namespaced::function(${0})",
+						NewText: "namespaced::function",
+						Snippet: "namespaced::function",
 						Range: hcl.Range{
 							Filename: "test.tf",
 							Start:    hcl.Pos{Line: 1, Column: 8, Byte: 7},
-							End:      hcl.Pos{Line: 1, Column: 30, Byte: 29},
+							End:      hcl.Pos{Line: 1, Column: 28, Byte: 27},
+						},
+					},
+				},
+			}),
+		},
+		{
+			"at the end of a partial name in a call with arguments",
+			map[string]*schema.AttributeSchema{
+				"attr": {
+					Constraint: schema.AnyExpression{
+						OfType: cty.String,
+					},
+				},
+			},
+			reference.Targets{},
+			`attr = jo("-", ["a"])`,
+			hcl.Pos{Line: 1, Column: 10, Byte: 9}, // after "jo"
+			lang.CompleteCandidates([]lang.Candidate{
+				{
+					Label:       "join",
+					Detail:      "join(separator string, …lists list of string) string",
+					Description: lang.Markdown("`join` produces a string by concatenating together all elements of a given list of strings with the given delimiter."),
+					Kind:        lang.FunctionCandidateKind,
+					TextEdit: lang.TextEdit{
+						NewText: "join",
+						Snippet: "join",
+						Range: hcl.Range{
+							Filename: "test.tf",
+							Start:    hcl.Pos{Line: 1, Column: 8, Byte: 7},
+							End:      hcl.Pos{Line: 1, Column: 10, Byte: 9},
+						},
+					},
+				},
+			}),
+		},
+		{
+			"at the end of a partial provider function name",
+			map[string]*schema.AttributeSchema{
+				"attr": {
+					Constraint: schema.AnyExpression{
+						OfType: cty.String,
+					},
+				},
+			},
+			reference.Targets{},
+			`attr = provider::framework::ex()`,
+			hcl.Pos{Line: 1, Column: 31, Byte: 30}, // after "ex"
+			lang.CompleteCandidates([]lang.Candidate{
+				{
+					Label:       "provider::framework::example",
+					Detail:      "provider::framework::example(input string) string",
+					Description: lang.Markdown("Echoes given argument as result"),
+					Kind:        lang.FunctionCandidateKind,
+					TextEdit: lang.TextEdit{
+						NewText: "provider::framework::example",
+						Snippet: "provider::framework::example",
+						Range: hcl.Range{
+							Filename: "test.tf",
+							Start:    hcl.Pos{Line: 1, Column: 8, Byte: 7},
+							End:      hcl.Pos{Line: 1, Column: 31, Byte: 30},
 						},
 					},
 				},

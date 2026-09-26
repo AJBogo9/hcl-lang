@@ -106,11 +106,16 @@ func (fe functionExpr) CompletionAtPos(ctx context.Context, pos hcl.Pos) []lang.
 		return []lang.Candidate{}
 
 	case *hclsyntax.FunctionCallExpr:
-		if eType.NameRange.ContainsPos(pos) {
+		if eType.NameRange.ContainsPos(pos) || eType.NameRange.End.Byte == pos.Byte {
+			// The call has its parentheses and arguments already, so
+			// only the name is replaced, also when the cursor is at its
+			// end, as in `provider::aws::arn|()`.
 			prefixLen := pos.Byte - eType.NameRange.Start.Byte
+			if prefixLen < 0 || prefixLen > len(eType.Name) {
+				return []lang.Candidate{}
+			}
 			prefix := eType.Name[0:prefixLen]
-			editRange := eType.Range()
-			return fe.matchingFunctions(prefix, editRange)
+			return fe.matchingFunctionNames(prefix, eType.NameRange)
 		}
 
 		f, ok := fe.pathCtx.Functions[eType.Name]
@@ -344,6 +349,17 @@ func (fe functionExpr) matchingFunctions(prefix string, editRange hcl.Range) []l
 		return candidates[i].Label < candidates[j].Label
 	})
 
+	return candidates
+}
+
+// matchingFunctionNames is matchingFunctions for the name of a call that
+// has its parentheses: the candidates insert the name alone.
+func (fe functionExpr) matchingFunctionNames(prefix string, nameRange hcl.Range) []lang.Candidate {
+	candidates := fe.matchingFunctions(prefix, nameRange)
+	for i, c := range candidates {
+		candidates[i].TextEdit.NewText = c.Label
+		candidates[i].TextEdit.Snippet = c.Label
+	}
 	return candidates
 }
 

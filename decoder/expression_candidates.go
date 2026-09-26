@@ -22,14 +22,24 @@ func (d *PathDecoder) attrValueCompletionAtPos(ctx context.Context, attr *hclsyn
 
 	if len(schema.CompletionHooks) > 0 {
 		candidates.IsComplete = false
-		candidates.List = append(candidates.List, d.candidatesFromHooks(ctx, attr, schema, outerBodyRng, pos)...)
+		candidates.List = append(candidates.List, d.candidatesFromHooks(ctx, attr.Expr, schema, pos)...)
 	}
 	count := len(candidates.List)
+
+	// Attributes nested in the value, such as those of an object, may
+	// declare hooks too. Their candidates depend on what is typed, so the
+	// list is incomplete when any ran.
+	nested := &nestedHooks{decoder: d}
+	ctx = context.WithValue(ctx, nestedHooksKey{}, nested)
 
 	seen := make(map[string]struct{})
 	if uint(count) < d.maxCandidates {
 		expr := d.newExpression(attr.Expr, schema.Constraint)
-		for _, candidate := range expr.CompletionAtPos(ctx, pos) {
+		exprCandidates := expr.CompletionAtPos(ctx, pos)
+		if nested.ran {
+			candidates.IsComplete = false
+		}
+		for _, candidate := range exprCandidates {
 			if uint(count) >= d.maxCandidates {
 				return candidates, nil
 			}
@@ -108,7 +118,36 @@ func isMultilineTemplateExpr(expr hclsyntax.Expression) bool {
 	return t.Range().Start.Line != t.Range().End.Line
 }
 
-func (d *PathDecoder) candidatesFromHooks(ctx context.Context, attr *hclsyntax.Attribute, aSchema *schema.AttributeSchema, outerBodyRng hcl.Range, pos hcl.Pos) []lang.Candidate {
+type nestedHooksKey struct{}
+
+// nestedHooks runs the completion hooks of attribute schemas nested in an
+// attribute's value, for example in an object constraint, which only get
+// the path context and not the decoder.
+type nestedHooks struct {
+	decoder *PathDecoder
+	ran     bool
+}
+
+// nestedHookCandidates returns the candidates of aSchema's completion
+// hooks for expr, the value of an attribute nested in another attribute's
+// value.
+func nestedHookCandidates(ctx context.Context, expr hcl.Expression, aSchema *schema.AttributeSchema, pos hcl.Pos) []lang.Candidate {
+	if len(aSchema.CompletionHooks) == 0 {
+		return nil
+	}
+	nested, ok := ctx.Value(nestedHooksKey{}).(*nestedHooks)
+	if !ok {
+		return nil
+	}
+	syntaxExpr, ok := expr.(hclsyntax.Expression)
+	if !ok {
+		return nil
+	}
+	nested.ran = true
+	return nested.decoder.candidatesFromHooks(ctx, syntaxExpr, aSchema, pos)
+}
+
+func (d *PathDecoder) candidatesFromHooks(ctx context.Context, expr hclsyntax.Expression, aSchema *schema.AttributeSchema, pos hcl.Pos) []lang.Candidate {
 	candidates := make([]lang.Candidate, 0)
 	con, ok := aSchema.Constraint.(schema.TypeAwareConstraint)
 	if !ok {
@@ -121,22 +160,22 @@ func (d *PathDecoder) candidatesFromHooks(ctx context.Context, attr *hclsyntax.A
 		return candidates
 	}
 
-	editRng := attr.Expr.Range()
-	if isEmptyExpression(attr.Expr) || isMultilineTemplateExpr(attr.Expr) {
+	editRng := expr.Range()
+	if isEmptyExpression(expr) || isMultilineTemplateExpr(expr) {
 		// An empty expression or a string without a closing quote will lead to
 		// an attribute expression spanning multiple lines.
 		// Since text edits only support a single line, we're resetting the End
 		// position here.
 		editRng.End = pos
 	}
-	prefixRng := attr.Expr.Range()
+	prefixRng := expr.Range()
 	prefixRng.End = pos
 	prefixBytes, _ := d.bytesFromRange(prefixRng)
 	prefix := string(prefixBytes)
 	prefix = strings.TrimLeft(prefix, `"`)
 
 	ctx = WithPath(ctx, d.path)
-	ctx = WithFilename(ctx, attr.Expr.Range().Filename)
+	ctx = WithFilename(ctx, expr.Range().Filename)
 	ctx = WithPos(ctx, pos)
 	ctx = WithMaxCandidates(ctx, d.maxCandidates)
 
