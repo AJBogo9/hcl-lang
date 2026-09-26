@@ -208,3 +208,95 @@ output "b" { value = aws_instance.web.arn }
 		})
 	}
 }
+
+func TestReferenceOriginsTargetingPos_moduleCallInOutputUse(t *testing.T) {
+	root := t.TempDir()
+	child := root + "/modules/child"
+	rootPath := lang.Path{Path: root}
+	childPath := lang.Path{Path: child}
+
+	src := `module "child" {}
+module "other" {}
+output "a" { value = module.child.name }
+output "b" { value = module.other.name }
+`
+	f, diags := hclsyntax.ParseConfig([]byte(src), "main.tf", hcl.InitialPos)
+	if diags.HasErrors() {
+		t.Fatal(diags)
+	}
+	blocks := f.Body.(*hclsyntax.Body).Blocks
+	valueRng := func(i int) hcl.Range {
+		return blocks[i].Body.Attributes["value"].Expr.Range()
+	}
+	addr := func(steps ...string) lang.Address {
+		a := lang.Address{lang.RootStep{Name: steps[0]}}
+		for _, s := range steps[1:] {
+			a = append(a, lang.AttrStep{Name: s})
+		}
+		return a
+	}
+	callTarget := func(i int, name string) reference.Target {
+		blockRng := blocks[i].Range()
+		return reference.Target{
+			Addr:     addr("module", name),
+			ScopeId:  "module",
+			Type:     cty.Object(map[string]cty.Type{"name": cty.String}),
+			RangePtr: blockRng.Ptr(),
+			NestedTargets: reference.Targets{
+				{Addr: addr("module", name, "name"), ScopeId: "module", Type: cty.String, RangePtr: blockRng.Ptr()},
+			},
+		}
+	}
+	outputRng := hcl.Range{Filename: "outputs.tf", Start: hcl.InitialPos, End: hcl.Pos{Line: 1, Column: 19, Byte: 18}}
+	// each use of an output has an implied origin in the child, with the
+	// range of the whole traversal
+	use := func(i int, call string) reference.Origins {
+		return reference.Origins{
+			reference.LocalOrigin{Addr: addr("module", call, "name"), Range: valueRng(i),
+				Constraints: reference.OriginConstraints{{OfType: cty.DynamicPseudoType}}},
+			reference.PathOrigin{Range: valueRng(i), TargetAddr: addr("output", "name"), TargetPath: childPath,
+				Constraints: reference.OriginConstraints{{OfScopeId: "output", OfType: cty.DynamicPseudoType}}},
+		}
+	}
+
+	paths := map[string]*PathContext{
+		root: {
+			Files:            map[string]*hcl.File{"main.tf": f},
+			ReferenceTargets: reference.Targets{callTarget(0, "child"), callTarget(1, "other")},
+			ReferenceOrigins: append(use(2, "child"), use(3, "other")...),
+		},
+		child: {
+			ReferenceTargets: reference.Targets{
+				{Addr: addr("output", "name"), ScopeId: "output", Type: cty.DynamicPseudoType, RangePtr: outputRng.Ptr()},
+			},
+		},
+	}
+
+	testCases := []struct {
+		name            string
+		pos             hcl.Pos
+		expectedOrigins ReferenceOrigins
+	}{
+		{
+			"on the call name: the uses of that call only",
+			hcl.Pos{Line: 3, Column: 31, Byte: 66},
+			ReferenceOrigins{{Path: rootPath, Range: valueRng(2)}},
+		},
+		{
+			"on the output name: its uses through every call",
+			hcl.Pos{Line: 3, Column: 36, Byte: 71},
+			ReferenceOrigins{{Path: rootPath, Range: valueRng(2)}, {Path: rootPath, Range: valueRng(3)}},
+		},
+	}
+
+	for i, tc := range testCases {
+		t.Run(fmt.Sprintf("%d-%s", i, tc.name), func(t *testing.T) {
+			d := NewDecoder(&testPathReader{paths: paths})
+			origins := d.ReferenceOriginsTargetingPos(rootPath, "main.tf", tc.pos)
+
+			if diff := cmp.Diff(tc.expectedOrigins, origins, ctydebug.CmpOptions); diff != "" {
+				t.Fatalf("mismatch of reference origins: %s", diff)
+			}
+		})
+	}
+}
