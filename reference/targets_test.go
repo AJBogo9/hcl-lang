@@ -649,6 +649,53 @@ func TestTargets_OutermostInFile(t *testing.T) {
 	}
 }
 
+func TestTargets_InnermostAtPos_narrowest(t *testing.T) {
+	rng := func(start, end int) *hcl.Range {
+		return &hcl.Range{
+			Filename: "test.tf",
+			Start:    hcl.Pos{Line: 1, Column: start + 1, Byte: start},
+			End:      hcl.Pos{Line: 1, Column: end + 1, Byte: end},
+		}
+	}
+	resource := Target{
+		Addr:        lang.Address{lang.RootStep{Name: "terraform_data"}, lang.AttrStep{Name: "web"}},
+		RangePtr:    rng(0, 200),
+		DefRangePtr: rng(0, 18),
+	}
+	eachKey := Target{
+		Addr:     lang.Address{lang.RootStep{Name: "each"}, lang.AttrStep{Name: "key"}},
+		RangePtr: rng(22, 45),
+	}
+	eachValue := Target{
+		Addr:     lang.Address{lang.RootStep{Name: "each"}, lang.AttrStep{Name: "value"}},
+		RangePtr: rng(22, 45),
+	}
+	targets := Targets{resource, eachKey, eachValue}
+
+	testCases := []struct {
+		name     string
+		pos      int
+		expected Targets
+	}{
+		// the for_each argument, not the resource around it
+		{"on for_each", 25, Targets{eachKey, eachValue}},
+		// the header is smaller than for_each, but only counts on it
+		{"on the header", 5, Targets{resource}},
+		{"elsewhere in the body", 100, Targets{resource}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := targets.InnermostAtPos("test.tf", hcl.Pos{Line: 1, Column: tc.pos + 1, Byte: tc.pos})
+			if !ok {
+				t.Fatal("expected targets")
+			}
+			if diff := cmp.Diff(tc.expected, got, ctydebug.CmpOptions); diff != "" {
+				t.Fatalf("mismatch of targets: %s", diff)
+			}
+		})
+	}
+}
+
 func TestTargets_InnermostAtPos(t *testing.T) {
 	testCases := []struct {
 		name            string

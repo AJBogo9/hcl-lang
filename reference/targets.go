@@ -291,5 +291,39 @@ func (refs Targets) InnermostAtPos(file string, pos hcl.Pos) (Targets, bool) {
 		innermostTargets = append(innermostTargets, target)
 	}
 
-	return innermostTargets, len(innermostTargets) > 0
+	return narrowestTargets(innermostTargets, file, pos), len(innermostTargets) > 0
+}
+
+// narrowestTargets keeps the targets with the shortest range, so that on
+// the for_each argument of a resource the targets are each.key and
+// each.value, not the resource block which also contains the position.
+// A target whose declaration range (such as a block header) holds the
+// position counts by that range.
+func narrowestTargets(targets Targets, file string, pos hcl.Pos) Targets {
+	if len(targets) < 2 {
+		return targets
+	}
+	size := func(t Target) int {
+		rng := t.RangePtr
+		if t.DefRangePtr != nil && t.DefRangePtr.Filename == file && t.DefRangePtr.ContainsPos(pos) {
+			rng = t.DefRangePtr
+		}
+		return rng.End.Byte - rng.Start.Byte
+	}
+	min := -1
+	for _, t := range targets {
+		if t.RangePtr == nil {
+			return targets
+		}
+		if n := size(t); min < 0 || n < min {
+			min = n
+		}
+	}
+	narrowest := make(Targets, 0, len(targets))
+	for _, t := range targets {
+		if size(t) == min {
+			narrowest = append(narrowest, t)
+		}
+	}
+	return narrowest
 }

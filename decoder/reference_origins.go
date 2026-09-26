@@ -90,7 +90,7 @@ func (d *PathDecoder) CollectReferenceOrigins() (reference.Origins, error) {
 		for _, origin := range refOrigins {
 			localOrigin, ok := origin.(reference.LocalOrigin)
 
-			if ok && localOrigin.Addr.Equals(impliedOrigin.OriginAddress) {
+			if ok && localOrigin.Address().Equals(impliedOrigin.OriginAddress) {
 				refOrigins = append(refOrigins, reference.PathOrigin{
 					Range:      origin.OriginRange(),
 					TargetAddr: impliedOrigin.TargetAddress,

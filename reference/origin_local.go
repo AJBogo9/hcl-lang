@@ -51,6 +51,31 @@ func (lo LocalOrigin) AppendConstraints(oc OriginConstraints) MatchableOrigin {
 	return lo
 }
 
+// Address returns the address the origin is matched against targets
+// with. An instance key of a module call is left out, so that
+// module.app[0].url and module.app["a"].url match module.app.url, the
+// target of the output, as module.app.url does.
 func (lo LocalOrigin) Address() lang.Address {
-	return lo.Addr
+	return withoutModuleInstanceKey(lo.Addr)
+}
+
+// withoutModuleInstanceKey removes the index step that follows the call
+// name in module.<call>[<key>]...
+func withoutModuleInstanceKey(addr lang.Address) lang.Address {
+	if len(addr) < 3 {
+		return addr
+	}
+	root, ok := addr[0].(lang.RootStep)
+	if !ok || root.Name != "module" {
+		return addr
+	}
+	if _, ok := addr[1].(lang.AttrStep); !ok {
+		return addr
+	}
+	if _, ok := addr[2].(lang.IndexStep); !ok {
+		return addr
+	}
+	out := make(lang.Address, 0, len(addr)-1)
+	out = append(out, addr[:2]...)
+	return append(out, addr[3:]...)
 }

@@ -542,3 +542,40 @@ func TestOrigins_Match(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalOrigin_Address_moduleInstanceKey(t *testing.T) {
+	output := Target{
+		Addr: lang.Address{
+			lang.RootStep{Name: "module"},
+			lang.AttrStep{Name: "app"},
+			lang.AttrStep{Name: "url"},
+		},
+		ScopeId: lang.ScopeId("module"),
+		Type:    cty.String,
+	}
+	testCases := []struct {
+		name    string
+		addr    lang.Address
+		matches bool
+	}{
+		{"no key", lang.Address{lang.RootStep{Name: "module"}, lang.AttrStep{Name: "app"}, lang.AttrStep{Name: "url"}}, true},
+		{"count index", lang.Address{lang.RootStep{Name: "module"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.NumberIntVal(0)}, lang.AttrStep{Name: "url"}}, true},
+		{"for_each key", lang.Address{lang.RootStep{Name: "module"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.StringVal("a")}, lang.AttrStep{Name: "url"}}, true},
+		{"other output", lang.Address{lang.RootStep{Name: "module"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.NumberIntVal(0)}, lang.AttrStep{Name: "id"}}, false},
+		{"not a module", lang.Address{lang.RootStep{Name: "var"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.NumberIntVal(0)}}, false},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			origin := LocalOrigin{
+				Addr:        tc.addr,
+				Constraints: OriginConstraints{{OfScopeId: lang.ScopeId("module"), OfType: cty.String}},
+			}
+			if got := output.Matches(origin); got != tc.matches {
+				t.Fatalf("expected match=%t, got %t (address %s)", tc.matches, got, origin.Address())
+			}
+			if len(origin.Addr) != len(tc.addr) {
+				t.Fatal("Address must not modify the origin")
+			}
+		})
+	}
+}

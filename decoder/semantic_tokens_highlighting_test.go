@@ -62,6 +62,61 @@ func TestSemanticTokens_highlighting(t *testing.T) {
 			},
 		},
 		{
+			"references interpolated into a literal string attribute",
+			&schema.BodySchema{Attributes: map[string]*schema.AttributeSchema{
+				"msg": {Constraint: schema.LiteralType{Type: cty.String}},
+			}},
+			reference.Origins{},
+			reference.Targets{},
+			testSemanticHighlighting,
+			`msg = "Got ${var.cfg.name}."`,
+			[]string{
+				"1:1 msg hcl-attrName[]",
+				"1:14 var hcl-referenceStep[kind-var,hcl-keywordStep]",
+				"1:18 cfg hcl-referenceStep[kind-var,hcl-nameStep]",
+				"1:22 name hcl-referenceStep[kind-var,hcl-attrStep]",
+			},
+		},
+		{
+			"content of a meta-argument block does not inherit its modifier",
+			&schema.BodySchema{Blocks: map[string]*schema.BlockSchema{
+				"lifecycle": {
+					SemanticTokenModifiers: lang.SemanticTokenModifiers{lang.TokenModifierMetaArgument},
+					Body: &schema.BodySchema{
+						Attributes: map[string]*schema.AttributeSchema{
+							"keep": {
+								Constraint:             schema.LiteralType{Type: cty.Bool},
+								SemanticTokenModifiers: lang.SemanticTokenModifiers{lang.TokenModifierMetaArgument},
+							},
+						},
+						Blocks: map[string]*schema.BlockSchema{
+							"check": {Body: &schema.BodySchema{Attributes: map[string]*schema.AttributeSchema{
+								"cond": {Constraint: schema.LiteralType{Type: cty.Bool}},
+							}}},
+						},
+					},
+				},
+			}},
+			reference.Origins{},
+			reference.Targets{},
+			testSemanticHighlighting,
+			`lifecycle {
+  keep = true
+  check {
+    cond = true
+  }
+}
+`,
+			[]string{
+				"1:1 lifecycle hcl-blockType[hcl-metaArgument]",
+				"2:3 keep hcl-attrName[hcl-metaArgument]",
+				"2:10 true hcl-bool[]",
+				"3:3 check hcl-blockType[]",
+				"4:5 cond hcl-attrName[]",
+				"4:12 true hcl-bool[]",
+			},
+		},
+		{
 			"unresolved data source reference",
 			&schema.BodySchema{Attributes: anyAttr},
 			reference.Origins{},
@@ -538,4 +593,77 @@ func formatSemanticTokens(src []byte, tokens []lang.SemanticToken) []string {
 			src[t.Range.Start.Byte:t.Range.End.Byte], t.Type, strings.Join(modifiers, ",")))
 	}
 	return out
+}
+
+func TestSemanticTokensInLines(t *testing.T) {
+	cfg := `attr = var.one
+res {
+  attr = var.two
+}
+res {
+  attr = var.three
+}
+attr2 = var.four
+`
+	bodySchema := &schema.BodySchema{
+		Attributes: map[string]*schema.AttributeSchema{
+			"attr":  {Constraint: schema.AnyExpression{OfType: cty.DynamicPseudoType}},
+			"attr2": {Constraint: schema.AnyExpression{OfType: cty.DynamicPseudoType}},
+		},
+		Blocks: map[string]*schema.BlockSchema{
+			"res": {Body: &schema.BodySchema{Attributes: map[string]*schema.AttributeSchema{
+				"attr": {Constraint: schema.AnyExpression{OfType: cty.DynamicPseudoType}},
+			}}},
+		},
+	}
+	f, _ := hclsyntax.ParseConfig([]byte(cfg), "test.tf", hcl.InitialPos)
+	d := testPathDecoder(t, &PathContext{
+		Schema:               bodySchema,
+		Files:                map[string]*hcl.File{"test.tf": f},
+		ReferenceOrigins:     reference.Origins{},
+		ReferenceTargets:     reference.Targets{},
+		SemanticHighlighting: testSemanticHighlighting,
+	})
+	ctx := context.Background()
+	full, err := d.SemanticTokensInFile(ctx, "test.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	testCases := []struct {
+		startLine, endLine int
+	}{
+		{1, 1},
+		{2, 3},
+		{3, 5},
+		{6, 8},
+		{1, 8},
+	}
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("%d-%d", tc.startLine, tc.endLine), func(t *testing.T) {
+			got, err := d.SemanticTokensInLines(ctx, "test.tf", tc.startLine, tc.endLine)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// the same tokens as the whole file on those lines, and no
+			// tokens of attributes or blocks far from them
+			onLines := func(tokens []lang.SemanticToken) []string {
+				kept := make([]lang.SemanticToken, 0)
+				for _, tok := range tokens {
+					if tok.Range.End.Line >= tc.startLine && tok.Range.Start.Line <= tc.endLine {
+						kept = append(kept, tok)
+					}
+				}
+				return formatSemanticTokens([]byte(cfg), kept)
+			}
+			if diff := cmp.Diff(onLines(full), onLines(got)); diff != "" {
+				t.Fatalf("unexpected tokens on the lines: %s", diff)
+			}
+			for _, tok := range got {
+				if tok.Range.Start.Line < tc.startLine-3 || tok.Range.Start.Line > tc.endLine+3 {
+					t.Fatalf("decoded a far token at line %d", tok.Range.Start.Line)
+				}
+			}
+		})
+	}
 }

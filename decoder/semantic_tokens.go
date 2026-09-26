@@ -46,6 +46,53 @@ func (d *PathDecoder) SemanticTokensInFile(ctx context.Context, filename string)
 	return tokens, nil
 }
 
+// SemanticTokensInLines is like SemanticTokensInFile, but decodes only
+// the top-level attributes and blocks which touch the (1-based,
+// inclusive) lines from startLine to endLine, so that a range request
+// costs a fraction of the whole file. Tokens of those attributes and
+// blocks outside the lines are returned too; callers filter them.
+func (d *PathDecoder) SemanticTokensInLines(ctx context.Context, filename string, startLine, endLine int) ([]lang.SemanticToken, error) {
+	f, err := d.fileByName(filename)
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := d.bodyForFileAndPos(filename, f, hcl.InitialPos)
+	if err != nil {
+		return nil, err
+	}
+
+	if d.pathCtx.Schema == nil {
+		return []lang.SemanticToken{}, nil
+	}
+
+	touches := func(rng hcl.Range) bool {
+		return rng.End.Line >= startLine && rng.Start.Line <= endLine
+	}
+	partial := &hclsyntax.Body{
+		Attributes: make(hclsyntax.Attributes),
+		SrcRange:   body.SrcRange,
+		EndRange:   body.EndRange,
+	}
+	for name, attr := range body.Attributes {
+		if touches(attr.SrcRange) {
+			partial.Attributes[name] = attr
+		}
+	}
+	for _, block := range body.Blocks {
+		if touches(block.Range()) {
+			partial.Blocks = append(partial.Blocks, block)
+		}
+	}
+
+	tokens := d.tokensForBody(ctx, partial, d.pathCtx.Schema, []lang.SemanticTokenModifier{})
+	sort.Slice(tokens, func(i, j int) bool {
+		return tokens[i].Range.Start.Byte < tokens[j].Range.Start.Byte
+	})
+
+	return tokens, nil
+}
+
 type dynamicBodyCtxKey struct{}
 
 func (d *PathDecoder) tokensForBody(ctx context.Context, body *hclsyntax.Body, bodySchema *schema.BodySchema, parentModifiers []lang.SemanticTokenModifier) []lang.SemanticToken {
@@ -94,7 +141,7 @@ func (d *PathDecoder) tokensForBody(ctx context.Context, body *hclsyntax.Body, b
 		})
 
 		exprTokens := d.newExpression(attr.Expr, attrSchema.Constraint).SemanticTokens(ctx)
-		if sh != nil && constraintAllowsReferences(attrSchema.Constraint) {
+		if sh != nil && (constraintAllowsReferences(attrSchema.Constraint) || templateHasReferences(attr.Expr)) {
 			exprTokens = mergeSyntaxTokens(exprTokens, syntaxSemanticTokens(ctx, d.pathCtx, attr.Expr))
 		}
 		tokens = append(tokens, exprTokens...)
@@ -156,11 +203,33 @@ func (d *PathDecoder) tokensForBody(ctx context.Context, body *hclsyntax.Body, b
 		if block.Body != nil {
 			mergedSchema, _ := schemahelper.MergeBlockBodySchemas(block.AsHCLBlock(), blockSchema)
 
-			tokens = append(tokens, d.tokensForBody(blockCtx, block.Body, mergedSchema, blockModifiers)...)
+			// A meta-argument block (e.g. lifecycle) marks its own
+			// keyword; its content is marked where the schema says so,
+			// so that e.g. a postcondition inside it looks like any other.
+			tokens = append(tokens, d.tokensForBody(blockCtx, block.Body, mergedSchema, withoutModifier(blockModifiers, lang.TokenModifierMetaArgument))...)
 		}
 	}
 
 	return tokens
+}
+
+// withoutModifier returns the modifiers without m, copying only when m
+// is present.
+func withoutModifier(modifiers []lang.SemanticTokenModifier, m lang.SemanticTokenModifier) []lang.SemanticTokenModifier {
+	for i, mod := range modifiers {
+		if mod != m {
+			continue
+		}
+		out := make([]lang.SemanticTokenModifier, 0, len(modifiers)-1)
+		out = append(out, modifiers[:i]...)
+		for _, rest := range modifiers[i+1:] {
+			if rest != m {
+				out = append(out, rest)
+			}
+		}
+		return out
+	}
+	return modifiers
 }
 
 func isPrimitiveTypeDeclaration(kw string) bool {

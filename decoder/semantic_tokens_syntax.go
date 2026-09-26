@@ -400,6 +400,18 @@ func mergeSyntaxTokens(tokens, syntaxTokens []lang.SemanticToken) []lang.Semanti
 	return tokens
 }
 
+// templateHasReferences reports whether expr is a string template which
+// interpolates references, such as an error_message of
+// "Got ${var.cfg.name}.": OpenTofu evaluates it although the schema
+// describes a literal string.
+func templateHasReferences(expr hcl.Expression) bool {
+	switch expr.(type) {
+	case *hclsyntax.TemplateExpr, *hclsyntax.TemplateWrapExpr:
+		return len(expr.Variables()) > 0
+	}
+	return false
+}
+
 // constraintAllowsReferences reports whether an expression of the given
 // constraint may contain references, i.e. whether tokens derived from
 // syntax may be reported for it. Type declarations, keywords and literal
