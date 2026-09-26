@@ -41,10 +41,23 @@ func (d *Decoder) SymbolTargetsAtPos(path lang.Path, file string, pos hcl.Pos) (
 	}
 
 	if origins, ok := localCtx.ReferenceOrigins.AtPos(file, pos); ok {
+		// on "app" in module.app[0].url: the module call, and not also
+		// the output, which the origin's implied path origin (with the
+		// same range) points to (as ReferenceTargetsForOriginAtPos)
+		narrowed := make(map[hcl.Range]bool)
+		for i, origin := range origins {
+			if lo, ok := origin.(reference.LocalOrigin); ok {
+				n := narrowToStepAtPos(localCtx, lo, file, pos)
+				if nlo, ok := n.(reference.LocalOrigin); ok && len(nlo.Addr) < len(lo.Addr) {
+					narrowed[lo.Range] = true
+				}
+				origins[i] = n
+			}
+		}
 		targets := make([]PathTarget, 0)
 		for _, origin := range origins {
-			if lo, ok := origin.(reference.LocalOrigin); ok {
-				origin = narrowToStepAtPos(localCtx, lo, file, pos)
+			if po, ok := origin.(reference.PathOrigin); ok && narrowed[po.Range] {
+				continue
 			}
 			targets = append(targets, d.resolveOrigin(path, localCtx, origin)...)
 		}
