@@ -70,14 +70,14 @@ func snippetForBlock(blockType string, block *schema.BlockSchema, prefillRequire
 
 		depKey := false
 		for _, l := range block.Labels {
-			if l.IsDepKey {
+			if completedDepKey(l) {
 				depKey = true
 			}
 		}
 
 		if depKey {
 			for _, l := range block.Labels {
-				if l.IsDepKey {
+				if completedDepKey(l) {
 					labels += ` "${0}"`
 				} else {
 					labels += fmt.Sprintf(` "%s"`, l.Name)
@@ -99,7 +99,7 @@ func snippetForBlock(blockType string, block *schema.BlockSchema, prefillRequire
 	placeholder := 1
 
 	for _, l := range block.Labels {
-		if l.IsDepKey {
+		if completedDepKey(l) {
 			labels += fmt.Sprintf(` "${%d}"`, placeholder)
 		} else {
 			labels += fmt.Sprintf(` "${%d:%s}"`, placeholder, l.Name)
@@ -108,4 +108,13 @@ func snippetForBlock(blockType string, block *schema.BlockSchema, prefillRequire
 	}
 
 	return fmt.Sprintf("%s%s {\n  ${%d}\n}", blockType, labels, placeholder)
+}
+
+// completedDepKey tells whether a label is a dependency key whose value
+// comes from the completion list, such as a resource type, so that its
+// snippet placeholder is left empty for that list. A dependency key the
+// user names, such as the name of a module call, keeps a named
+// placeholder like any other label.
+func completedDepKey(l *schema.LabelSchema) bool {
+	return l.IsDepKey && l.Completable
 }

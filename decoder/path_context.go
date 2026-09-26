@@ -26,6 +26,11 @@ type PathContext struct {
 	// SemanticHighlighting enables kind-aware semantic tokens.
 	// See schema.SemanticHighlighting. Nil keeps the original tokens.
 	SemanticHighlighting *schema.SemanticHighlighting
+
+	// ReferenceOriginIndex, when set, indexes ReferenceOrigins, so that
+	// finding the origins of a target needs not test every origin.
+	// See reference.NewOriginIndex.
+	ReferenceOriginIndex *reference.OriginIndex
 }
 
 type pathCtxKey struct{}

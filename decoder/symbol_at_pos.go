@@ -35,7 +35,7 @@ type PathOrigin struct {
 // whose block header pos is on. The second return value tells whether
 // pos was on a reference.
 func (d *Decoder) SymbolTargetsAtPos(path lang.Path, file string, pos hcl.Pos) ([]PathTarget, bool) {
-	localCtx, err := d.pathReader.PathContext(path)
+	localCtx, err := ReferencePathContext(d.pathReader, path)
 	if err != nil {
 		return nil, false
 	}
@@ -124,7 +124,7 @@ func (d *Decoder) resolveOrigin(path lang.Path, pathCtx *PathContext, origin ref
 		// points to a file, not to a symbol
 		return nil
 	case reference.PathOrigin:
-		ctx, err := d.pathReader.PathContext(o.TargetPath)
+		ctx, err := ReferencePathContext(d.pathReader, o.TargetPath)
 		if err != nil {
 			return nil
 		}
@@ -151,6 +151,26 @@ func (d *Decoder) resolveOrigin(path lang.Path, pathCtx *PathContext, origin ref
 	return targets
 }
 
+// ReferencePathReader is implemented by a PathReader which can return
+// the part of a path context that reference lookups read: the reference
+// origins and targets and the files. Building it skips the schema, which
+// is costly, and it may be cached and shared, so it is read-only.
+// Lookups across paths, such as OriginsTargeting, use it when the path
+// reader implements it.
+type ReferencePathReader interface {
+	ReferencePathContext(path lang.Path) (*PathContext, error)
+}
+
+// ReferencePathContext returns the context of the path for reference
+// lookups: from ReferencePathContext when the reader implements
+// ReferencePathReader, else from PathContext.
+func ReferencePathContext(pathReader PathReader, path lang.Path) (*PathContext, error) {
+	if rr, ok := pathReader.(ReferencePathReader); ok {
+		return rr.ReferencePathContext(path)
+	}
+	return pathReader.PathContext(path)
+}
+
 // OriginsTargeting returns origins from all known paths which resolve
 // to the given target declared in targetPath (or to one of its nested
 // targets), in no particular order.
@@ -161,6 +181,18 @@ func (d *Decoder) OriginsTargeting(ctx context.Context, target reference.Target,
 // OriginsTargeting is like Decoder.OriginsTargeting for callers
 // which only have a PathReader, such as code lenses.
 func OriginsTargeting(ctx context.Context, pathReader PathReader, target reference.Target, targetPath lang.Path) []PathOrigin {
+	return originsTargeting(pathReader, target, targetPath, pathReader.Paths(ctx))
+}
+
+// OriginsTargetingInPath is like OriginsTargeting, but only returns the
+// origins found in inPath, e.g. to highlight the uses in one file. It
+// reads no other path than inPath and, when an origin needs resolving,
+// targetPath.
+func (d *Decoder) OriginsTargetingInPath(target reference.Target, targetPath lang.Path, inPath lang.Path) []PathOrigin {
+	return originsTargeting(d.pathReader, target, targetPath, []lang.Path{inPath})
+}
+
+func originsTargeting(pathReader PathReader, target reference.Target, targetPath lang.Path, paths []lang.Path) []PathOrigin {
 	origins := make([]PathOrigin, 0)
 
 	// read only when an origin needs resolving, since building
@@ -168,7 +200,7 @@ func OriginsTargeting(ctx context.Context, pathReader PathReader, target referen
 	var targetCtx *PathContext
 	allTargets := func() reference.Targets {
 		if targetCtx == nil {
-			ctx, err := pathReader.PathContext(targetPath)
+			ctx, err := ReferencePathContext(pathReader, targetPath)
 			if err != nil {
 				return reference.Targets{}
 			}
@@ -177,15 +209,27 @@ func OriginsTargeting(ctx context.Context, pathReader PathReader, target referen
 		return targetCtx.ReferenceTargets
 	}
 
-	for _, p := range pathReader.Paths(ctx) {
-		pathCtx, err := pathReader.PathContext(p)
+	// prepared once for all the indexed paths
+	var matcher *reference.TargetMatcher
+
+	for _, p := range paths {
+		pathCtx, err := ReferencePathContext(pathReader, p)
 		if err != nil {
 			continue
 		}
 		if p.Equals(targetPath) {
 			targetCtx = pathCtx
 		}
-		for _, origin := range pathCtx.ReferenceOrigins.MatchResolved(p, target, targetPath, allTargets) {
+		var matched reference.Origins
+		if pathCtx.ReferenceOriginIndex != nil {
+			if matcher == nil {
+				matcher = reference.NewTargetMatcher(target)
+			}
+			matched = pathCtx.ReferenceOriginIndex.MatchResolved(p, matcher, targetPath, allTargets)
+		} else {
+			matched = pathCtx.ReferenceOrigins.MatchResolved(p, target, targetPath, allTargets)
+		}
+		for _, origin := range matched {
 			origins = append(origins, PathOrigin{Path: p, Origin: origin})
 		}
 	}

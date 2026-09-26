@@ -54,9 +54,24 @@ func (d *PathDecoder) symbolsInFile(filename string) ([]Symbol, error) {
 //
 // Symbols within JSON files require schema to be present for decoding.
 func (d *Decoder) Symbols(ctx context.Context, query string) ([]Symbol, error) {
+	return d.SymbolsInPaths(ctx, query, nil)
+}
+
+// SymbolsInPaths is like Symbols, but leaves out the paths for which skip
+// returns true, such as copies of modules installed by a tool.
+func (d *Decoder) SymbolsInPaths(ctx context.Context, query string, skip func(lang.Path) bool) ([]Symbol, error) {
 	symbols := make([]Symbol, 0)
 
 	for _, path := range d.pathReader.Paths(ctx) {
+		if skip != nil && skip(path) {
+			continue
+		}
+		// A path without files has no symbols, so the schema, which is
+		// costly to build, is only built for a path with files.
+		refCtx, err := ReferencePathContext(d.pathReader, path)
+		if err != nil || len(refCtx.Files) == 0 {
+			continue
+		}
 		pathDecoder, err := d.Path(path)
 		if err != nil {
 			continue
