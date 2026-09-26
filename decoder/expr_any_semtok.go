@@ -120,7 +120,7 @@ func (a Any) semanticTokensForNonComplexExpr(ctx context.Context) []lang.Semanti
 
 	ref := Reference{
 		expr:    a.expr,
-		cons:    schema.Reference{OfType: a.cons.OfType},
+		cons:    schema.Reference{OfType: a.cons.OfType, OfScopeId: a.cons.OfScopeId},
 		pathCtx: a.pathCtx,
 	}
 	tokens := ref.SemanticTokens(ctx)

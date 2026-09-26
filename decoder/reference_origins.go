@@ -178,6 +178,13 @@ func (d *PathDecoder) referenceOriginsInBody(body hcl.Body, bodySchema *schema.B
 		expr := d.newExpression(attr.Expr, aSchema.Constraint)
 		if eType, ok := expr.(ReferenceOriginsExpression); ok {
 			origins = append(origins, eType.ReferenceOrigins(ctx)...)
+		} else if bodySchema.Extensions != nil && bodySchema.Extensions.EarlyEvalRefs {
+			// e.g. path = var.state_path in a backend, whose constraint
+			// is a literal string
+			anyExpr := d.newExpression(attr.Expr, schema.AnyExpression{OfType: cty.DynamicPseudoType})
+			if eType, ok := anyExpr.(ReferenceOriginsExpression); ok {
+				origins = append(origins, eType.ReferenceOrigins(ctx)...)
+			}
 		}
 	}
 
@@ -201,6 +208,14 @@ func (d *PathDecoder) referenceOriginsInBody(body hcl.Body, bodySchema *schema.B
 				continue
 			}
 			mergedSchema, _ := schemahelper.MergeBlockBodySchemas(block.Block, bSchema)
+			if bodySchema.Extensions != nil && bodySchema.Extensions.EarlyEvalRefs {
+				// nested blocks of a backend or of the encryption block
+				// are evaluated early too
+				if mergedSchema.Extensions == nil {
+					mergedSchema.Extensions = &schema.BodyExtensions{}
+				}
+				mergedSchema.Extensions.EarlyEvalRefs = true
+			}
 
 			os, ios := d.referenceOriginsInBody(block.Body, mergedSchema)
 			origins = append(origins, os...)
@@ -217,10 +232,9 @@ func (d *PathDecoder) collectUnknownAttributeOrigins(ctx context.Context, body h
 	origins := make(reference.Origins, 0)
 
 	// Get all attributes from body
-	attrs, diags := body.JustAttributes()
-	if diags.HasErrors() {
-		return origins
-	}
+	// A body with nested blocks (such as lifecycle) is an error for
+	// JustAttributes, which still returns the attributes it found.
+	attrs, _ := body.JustAttributes()
 
 	for name, attr := range attrs {
 		// Skip if attribute is in schema (already processed)

@@ -156,10 +156,13 @@ func (a Any) refOriginsForNonComplexExpr(ctx context.Context) reference.Origins 
 	}
 
 	allowSelfRefs := schema.ActiveSelfRefsFromContext(ctx)
+	if origins, ok := a.refOriginsForScopedIndexExpr(ctx); ok {
+		return origins
+	}
 	te, ok := a.expr.(*hclsyntax.ScopeTraversalExpr)
 	if ok {
 		oCons := reference.OriginConstraints{
-			{OfType: a.cons.OfType},
+			{OfType: a.cons.OfType, OfScopeId: a.cons.OfScopeId},
 		}
 		origin, ok := reference.TraversalToLocalOrigin(te.Traversal, oCons, allowSelfRefs)
 		if ok {
@@ -167,6 +170,10 @@ func (a Any) refOriginsForNonComplexExpr(ctx context.Context) reference.Origins 
 		}
 
 		return reference.Origins{}
+	}
+
+	if origins, ok := a.refOriginsForInstanceTraversal(ctx); ok {
+		return origins
 	}
 
 	// if not we just collect any/all origins with vague constraint
@@ -183,4 +190,121 @@ func (a Any) refOriginsForNonComplexExpr(ctx context.Context) reference.Origins 
 		}
 	}
 	return origins
+}
+
+// refOriginsForInstanceTraversal collects the origin of a splat over the
+// instances of a module call, resource or data source, such as
+// module.app[*].url, or of an instance picked by a dynamic key, such as
+// module.app[var.key].url. The syntax splits such a traversal in two, so
+// that only module.app would be an origin. Here the whole traversal is
+// one origin, with an unknown key in place of the splat or the dynamic
+// key, which matches module.app.url (see reference.LocalOrigin.Address)
+// as module.app[0].url does. The key's own origins are collected too.
+func (a Any) refOriginsForInstanceTraversal(ctx context.Context) (reference.Origins, bool) {
+	var src *hclsyntax.ScopeTraversalExpr
+	var rel hcl.Traversal
+	var key hclsyntax.Expression
+	var keyRange hcl.Range
+
+	switch eType := a.expr.(type) {
+	case *hclsyntax.SplatExpr:
+		s, ok := eType.Source.(*hclsyntax.ScopeTraversalExpr)
+		if !ok {
+			return nil, false
+		}
+		each, ok := eType.Each.(*hclsyntax.RelativeTraversalExpr)
+		if !ok {
+			return nil, false
+		}
+		if _, ok := each.Source.(*hclsyntax.AnonSymbolExpr); !ok {
+			return nil, false
+		}
+		src, rel, keyRange = s, each.Traversal, eType.MarkerRange
+	case *hclsyntax.RelativeTraversalExpr:
+		idx, ok := eType.Source.(*hclsyntax.IndexExpr)
+		if !ok {
+			return nil, false
+		}
+		s, ok := idx.Collection.(*hclsyntax.ScopeTraversalExpr)
+		if !ok {
+			return nil, false
+		}
+		src, rel, key, keyRange = s, eType.Traversal, idx.Key, idx.BracketRange
+	default:
+		return nil, false
+	}
+	if len(rel) == 0 {
+		return nil, false
+	}
+	if _, ok := rel[0].(hcl.TraverseAttr); !ok {
+		return nil, false
+	}
+
+	traversal := make(hcl.Traversal, 0, len(src.Traversal)+1+len(rel))
+	traversal = append(traversal, src.Traversal...)
+	traversal = append(traversal, hcl.TraverseIndex{Key: cty.DynamicVal, SrcRange: keyRange})
+	traversal = append(traversal, rel...)
+
+	allowSelfRefs := schema.ActiveSelfRefsFromContext(ctx)
+	origin, ok := reference.TraversalToLocalOrigin(traversal, reference.OriginConstraints{
+		{OfType: cty.DynamicPseudoType},
+	}, allowSelfRefs)
+	if !ok {
+		return nil, false
+	}
+	if len(origin.Address()) == len(origin.Addr) {
+		// the index does not pick an instance, e.g. var.list[*].name
+		// or aws_instance.web.tags[var.k].x, whose origin is the value
+		// before the index, as collected below
+		return nil, false
+	}
+
+	origins := reference.Origins{origin}
+	if key != nil {
+		// as the fallback below collects them
+		for _, keyTraversal := range key.Variables() {
+			keyOrigin, ok := reference.TraversalToLocalOrigin(keyTraversal, reference.OriginConstraints{
+				{OfType: cty.DynamicPseudoType},
+			}, allowSelfRefs)
+			if ok {
+				origins = append(origins, keyOrigin)
+			}
+		}
+	}
+	return origins, true
+}
+
+// refOriginsForScopedIndexExpr collects the origins of an expression of
+// a scope (see schema.AnyExpression.OfScopeId) which picks an instance
+// by a key, such as random.by_key[var.k] naming a provider: the traversal
+// is of the scope, the key's references are any values.
+func (a Any) refOriginsForScopedIndexExpr(ctx context.Context) (reference.Origins, bool) {
+	if a.cons.OfScopeId == "" {
+		return nil, false
+	}
+	idx, ok := a.expr.(*hclsyntax.IndexExpr)
+	if !ok {
+		return nil, false
+	}
+	coll, ok := idx.Collection.(*hclsyntax.ScopeTraversalExpr)
+	if !ok {
+		return nil, false
+	}
+	allowSelfRefs := schema.ActiveSelfRefsFromContext(ctx)
+	origins := make(reference.Origins, 0)
+	origin, ok := reference.TraversalToLocalOrigin(coll.Traversal, reference.OriginConstraints{
+		{OfType: cty.DynamicPseudoType, OfScopeId: a.cons.OfScopeId},
+	}, allowSelfRefs)
+	if ok {
+		origins = append(origins, origin)
+	}
+	for _, keyTraversal := range idx.Key.Variables() {
+		keyOrigin, ok := reference.TraversalToLocalOrigin(keyTraversal, reference.OriginConstraints{
+			{OfType: cty.DynamicPseudoType},
+		}, allowSelfRefs)
+		if ok {
+			origins = append(origins, keyOrigin)
+		}
+	}
+	return origins, true
 }

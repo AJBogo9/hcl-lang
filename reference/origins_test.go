@@ -563,6 +563,7 @@ func TestLocalOrigin_Address_moduleInstanceKey(t *testing.T) {
 		{"for_each key", lang.Address{lang.RootStep{Name: "module"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.StringVal("a")}, lang.AttrStep{Name: "url"}}, true},
 		{"other output", lang.Address{lang.RootStep{Name: "module"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.NumberIntVal(0)}, lang.AttrStep{Name: "id"}}, false},
 		{"not a module", lang.Address{lang.RootStep{Name: "var"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.NumberIntVal(0)}}, false},
+		{"unknown key of a splat", lang.Address{lang.RootStep{Name: "module"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.DynamicVal}, lang.AttrStep{Name: "url"}}, true},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -575,6 +576,79 @@ func TestLocalOrigin_Address_moduleInstanceKey(t *testing.T) {
 			}
 			if len(origin.Addr) != len(tc.addr) {
 				t.Fatal("Address must not modify the origin")
+			}
+		})
+	}
+}
+
+func TestLocalOrigin_Address_resourceInstanceKey(t *testing.T) {
+	root := func(name string) lang.RootStep { return lang.RootStep{Name: name} }
+	attr := func(name string) lang.AttrStep { return lang.AttrStep{Name: name} }
+	idx := func(key cty.Value) lang.IndexStep { return lang.IndexStep{Key: key} }
+
+	testCases := []struct {
+		name     string
+		addr     lang.Address
+		expected string
+	}{
+		{"counted resource", lang.Address{root("aws_instance"), attr("web"), idx(cty.NumberIntVal(0)), attr("id")}, "aws_instance.web.id"},
+		{"resource with for_each", lang.Address{root("aws_instance"), attr("web"), idx(cty.StringVal("a"))}, "aws_instance.web"},
+		{"counted data source", lang.Address{root("data"), attr("aws_ami"), attr("x"), idx(cty.NumberIntVal(1)), attr("id")}, "data.aws_ami.x.id"},
+		{"ephemeral resource", lang.Address{root("ephemeral"), attr("random_password"), attr("p"), idx(cty.NumberIntVal(0)), attr("result")}, "ephemeral.random_password.p.result"},
+		{"index into a resource attribute", lang.Address{root("aws_instance"), attr("web"), attr("tags"), idx(cty.StringVal("k"))}, `aws_instance.web.tags["k"]`},
+		{"index into a variable", lang.Address{root("var"), attr("list"), idx(cty.NumberIntVal(0)), attr("id")}, "var.list[0].id"},
+		{"index into a local", lang.Address{root("local"), attr("m"), idx(cty.StringVal("k"))}, `local.m["k"]`},
+		{"index into each.value", lang.Address{root("each"), attr("value"), idx(cty.NumberIntVal(0))}, "each.value[0]"},
+		{"index into a data source attribute", lang.Address{root("data"), attr("aws_ami"), attr("x"), attr("ids"), idx(cty.NumberIntVal(0))}, "data.aws_ami.x.ids[0]"},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			origin := LocalOrigin{Addr: tc.addr}
+			if got := origin.Address().String(); got != tc.expected {
+				t.Fatalf("expected %s, got %s", tc.expected, got)
+			}
+		})
+	}
+}
+
+func TestOrigins_AtPos_innermost(t *testing.T) {
+	rng := func(start, end int) hcl.Range {
+		return hcl.Range{
+			Filename: "test.tf",
+			Start:    hcl.Pos{Line: 1, Column: start + 1, Byte: start},
+			End:      hcl.Pos{Line: 1, Column: end + 1, Byte: end},
+		}
+	}
+	// attr = module.app[var.key].url
+	outer := LocalOrigin{
+		Addr:  lang.Address{lang.RootStep{Name: "module"}, lang.AttrStep{Name: "app"}, lang.IndexStep{Key: cty.DynamicVal}, lang.AttrStep{Name: "url"}},
+		Range: rng(7, 30),
+	}
+	key := LocalOrigin{
+		Addr:  lang.Address{lang.RootStep{Name: "var"}, lang.AttrStep{Name: "key"}},
+		Range: rng(18, 25),
+	}
+	// a path origin with the same range as the key is not held by it
+	implied := PathOrigin{Range: rng(18, 25)}
+	origins := Origins{outer, key, implied}
+
+	testCases := []struct {
+		name     string
+		byte     int
+		expected Origins
+	}{
+		{"on the module call", 10, Origins{outer}},
+		{"on the key", 22, Origins{key, implied}},
+		{"on the output", 28, Origins{outer}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := origins.AtPos("test.tf", hcl.Pos{Line: 1, Column: tc.byte + 1, Byte: tc.byte})
+			if !ok {
+				t.Fatal("expected an origin")
+			}
+			if diff := cmp.Diff(tc.expected, got, ctydebug.CmpOptions); diff != "" {
+				t.Fatalf("unexpected origins: %s", diff)
 			}
 		})
 	}

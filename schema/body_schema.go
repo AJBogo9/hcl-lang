@@ -60,6 +60,11 @@ type BodyExtensions struct {
 	SelfRefs      bool // self.* refs
 	UnknownRefs   bool // collect reference origins from attributes/blocks not in schema
 	SameBodyRefs  bool // attributes in this body can reference sibling attributes
+	// EarlyEvalRefs collects reference origins from the attributes of this
+	// body and of its nested blocks whatever their constraint, including
+	// literals, which OpenTofu evaluates early from variables and locals
+	// (e.g. a backend, a module source or the encryption block).
+	EarlyEvalRefs bool
 }
 
 func (be *BodyExtensions) Copy() *BodyExtensions {
@@ -74,6 +79,7 @@ func (be *BodyExtensions) Copy() *BodyExtensions {
 		SelfRefs:      be.SelfRefs,
 		UnknownRefs:   be.UnknownRefs,
 		SameBodyRefs:  be.SameBodyRefs,
+		EarlyEvalRefs: be.EarlyEvalRefs,
 	}
 }
 

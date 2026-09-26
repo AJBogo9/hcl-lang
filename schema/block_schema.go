@@ -107,6 +107,12 @@ type BlockAddrSchema struct {
 	// BodySchema.Extensions.SelfRef, where only self.* origins
 	// within a body w/ SelfRef:true will be collected.
 	DependentBodySelfRef bool
+
+	// ScopedOriginsOnly makes the targets of the block match only origins
+	// constrained to ScopeId. An address can mean two things: a provider
+	// "local" aliased "secondary" is local.secondary, and so is a local
+	// value, which a reference outside a provider meta-argument means.
+	ScopedOriginsOnly bool
 }
 
 type BlockAsTypeOf struct {
@@ -152,6 +158,7 @@ func (bas *BlockAddrSchema) Copy() *BlockAddrSchema {
 		InferDependentBody:       bas.InferDependentBody,
 		DependentBodySelfRef:     bas.DependentBodySelfRef,
 		SupportUnknownNestedRefs: bas.SupportUnknownNestedRefs,
+		ScopedOriginsOnly:        bas.ScopedOriginsOnly,
 		Steps:                    bas.Steps.Copy(),
 	}
 

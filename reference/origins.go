@@ -23,6 +23,9 @@ func (ro Origins) Copy() Origins {
 	return newOrigins
 }
 
+// AtPos returns the innermost origins at pos. An origin can hold another
+// one: module.app[var.key].url holds var.key, and on var.key only
+// var.key is the reference under the cursor.
 func (ro Origins) AtPos(file string, pos hcl.Pos) (Origins, bool) {
 	matchingOrigins := make(Origins, 0)
 	for _, origin := range ro {
@@ -31,7 +34,27 @@ func (ro Origins) AtPos(file string, pos hcl.Pos) (Origins, bool) {
 		}
 	}
 
-	return matchingOrigins, len(matchingOrigins) > 0
+	innermost := make(Origins, 0, len(matchingOrigins))
+	for _, origin := range matchingOrigins {
+		if !holdsAnother(origin.OriginRange(), matchingOrigins) {
+			innermost = append(innermost, origin)
+		}
+	}
+
+	return innermost, len(innermost) > 0
+}
+
+// holdsAnother reports whether rng strictly contains the range of one
+// of the origins.
+func holdsAnother(rng hcl.Range, origins Origins) bool {
+	for _, other := range origins {
+		o := other.OriginRange()
+		if o.Start.Byte >= rng.Start.Byte && o.End.Byte <= rng.End.Byte &&
+			(o.Start.Byte > rng.Start.Byte || o.End.Byte < rng.End.Byte) {
+			return true
+		}
+	}
+	return false
 }
 
 func (ro Origins) Match(localPath lang.Path, target Target, targetPath lang.Path) Origins {
