@@ -216,3 +216,104 @@ func TestTarget_Matches_scopedOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestTarget_Matches_targetableFromRanges(t *testing.T) {
+	addr := lang.Address{lang.RootStep{Name: "var"}, lang.AttrStep{Name: "names"}}
+	rng := func(file string, start, end int) hcl.Range {
+		return hcl.Range{
+			Filename: file,
+			Start:    hcl.Pos{Line: 1, Column: start + 1, Byte: start},
+			End:      hcl.Pos{Line: 1, Column: end + 1, Byte: end},
+		}
+	}
+	runs := []hcl.Range{rng("a.tftest.hcl", 10, 20), rng("a.tftest.hcl", 40, 50)}
+
+	testCases := []struct {
+		name    string
+		ranges  []hcl.Range
+		origin  MatchableOrigin
+		matches bool
+	}{
+		{"no ranges", nil, LocalOrigin{Addr: addr, Range: rng("a.tftest.hcl", 0, 5)}, true},
+		{"inside the first range", runs, LocalOrigin{Addr: addr, Range: rng("a.tftest.hcl", 12, 15)}, true},
+		{"inside the second range", runs, LocalOrigin{Addr: addr, Range: rng("a.tftest.hcl", 42, 45)}, true},
+		{"between the ranges", runs, LocalOrigin{Addr: addr, Range: rng("a.tftest.hcl", 25, 30)}, false},
+		{"same offsets in another file", runs, LocalOrigin{Addr: addr, Range: rng("b.tftest.hcl", 12, 15)}, false},
+		{"path origin inside a range", runs, PathOrigin{TargetAddr: addr, Range: rng("a.tftest.hcl", 12, 15)}, true},
+		{"path origin outside the ranges", runs, PathOrigin{TargetAddr: addr, Range: rng("a.tftest.hcl", 25, 30)}, false},
+		{"element outside the ranges", runs, LocalOrigin{
+			Addr:  append(addr.Copy(), lang.IndexStep{Key: cty.NumberIntVal(0)}),
+			Range: rng("a.tftest.hcl", 25, 30),
+		}, false},
+		{"element inside a range", runs, LocalOrigin{
+			Addr:  append(addr.Copy(), lang.IndexStep{Key: cty.NumberIntVal(0)}),
+			Range: rng("a.tftest.hcl", 12, 15),
+		}, true},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			target := Target{
+				Addr:                 addr,
+				ScopeId:              lang.ScopeId("variable"),
+				Type:                 cty.List(cty.String),
+				TargetableFromRanges: tc.ranges,
+			}
+			if got := target.Matches(tc.origin); got != tc.matches {
+				t.Fatalf("expected match=%t, got %t", tc.matches, got)
+			}
+		})
+	}
+}
+
+func TestTargets_MatchWalk_targetableFromRanges(t *testing.T) {
+	rng := func(start, end int) hcl.Range {
+		return hcl.Range{
+			Filename: "a.tftest.hcl",
+			Start:    hcl.Pos{Line: 1, Column: start + 1, Byte: start},
+			End:      hcl.Pos{Line: 1, Column: end + 1, Byte: end},
+		}
+	}
+	targets := Targets{
+		{
+			Addr:                 lang.Address{lang.RootStep{Name: "var"}, lang.AttrStep{Name: "root"}},
+			Type:                 cty.String,
+			TargetableFromRanges: []hcl.Range{rng(0, 20)},
+		},
+		{
+			Addr:                 lang.Address{lang.RootStep{Name: "var"}, lang.AttrStep{Name: "child"}},
+			Type:                 cty.String,
+			TargetableFromRanges: []hcl.Range{rng(30, 50)},
+		},
+		{
+			LocalAddr:            lang.Address{lang.RootStep{Name: "run"}, lang.AttrStep{Name: "first"}},
+			Type:                 cty.DynamicPseudoType,
+			TargetableFromRanges: []hcl.Range{rng(30, 50)},
+		},
+	}
+
+	testCases := []struct {
+		name   string
+		origin hcl.Range
+		want   []string
+	}{
+		{"in the first range", rng(5, 5), []string{"var.root"}},
+		{"in the second range", rng(35, 35), []string{"var.child", "run.first"}},
+		{"outside both", rng(25, 25), []string{}},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := make([]string, 0)
+			targets.MatchWalk(context.Background(), schema.Reference{OfType: cty.String}, "", hcl.Range{}, tc.origin, func(target Target) error {
+				if len(target.Addr) > 0 {
+					got = append(got, target.Addr.String())
+				} else {
+					got = append(got, target.LocalAddr.String())
+				}
+				return nil
+			})
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Fatalf("unexpected matches: %s", diff)
+			}
+		})
+	}
+}

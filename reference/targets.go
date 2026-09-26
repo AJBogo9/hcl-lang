@@ -90,6 +90,9 @@ func (targets Targets) MatchWalk(ctx context.Context, ref schema.Reference, pref
 }
 
 func localTargetMatches(ctx context.Context, target Target, ref schema.Reference, prefix string, outermostBodyRng, originRng hcl.Range) bool {
+	if !target.targetableFrom(originRng) {
+		return false
+	}
 	if len(target.LocalAddr) > 0 && strings.HasPrefix(target.LocalAddr.String(), prefix) {
 		// reject self references if not enabled
 		if !schema.ActiveSelfRefsFromContext(ctx) && target.LocalAddr[0].String() == "self" {
@@ -131,6 +134,9 @@ func localTargetMatches(ctx context.Context, target Target, ref schema.Reference
 }
 
 func absTargetMatches(ctx context.Context, target Target, ref schema.Reference, prefix string, outermostBodyRng, originRng hcl.Range) bool {
+	if !target.targetableFrom(originRng) {
+		return false
+	}
 	if len(target.Addr) > 0 && strings.HasPrefix(target.Addr.String(), prefix) {
 		// Reject references to block's own fields from within the body
 		if referenceTargetIsInRange(target, outermostBodyRng) {
