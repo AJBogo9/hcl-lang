@@ -33,9 +33,27 @@ func (d *Decoder) ReferenceTargetsForOriginAtPos(path lang.Path, file string, po
 		return matchingTargets, &reference.NoOriginFound{}
 	}
 
+	// on "app" in module.app[0].url: the module call, as references and
+	// highlight resolve it, and not also the output, which the origin's
+	// implied path origin (with the same range) points to
+	narrowed := make(map[hcl.Range]bool)
+	for i, origin := range origins {
+		if lo, ok := origin.(reference.LocalOrigin); ok {
+			n := narrowToStepAtPos(pathCtx, lo, file, pos)
+			if nlo, ok := n.(reference.LocalOrigin); ok && len(nlo.Addr) < len(lo.Addr) {
+				narrowed[lo.Range] = true
+			}
+			origins[i] = n
+		}
+	}
+
 	for _, origin := range origins {
 		targetCtx := pathCtx
 		targetPath := path
+
+		if po, ok := origin.(reference.PathOrigin); ok && narrowed[po.Range] {
+			continue
+		}
 
 		if directOrigin, ok := origin.(reference.DirectOrigin); ok {
 			matchingTargets = append(matchingTargets, &ReferenceTarget{
@@ -54,7 +72,6 @@ func (d *Decoder) ReferenceTargetsForOriginAtPos(path lang.Path, file string, po
 			targetCtx = ctx
 			targetPath = pathOrigin.TargetPath
 		}
-
 		matchableOrigin, ok := origin.(reference.MatchableOrigin)
 		if !ok {
 			continue
@@ -158,12 +175,16 @@ func (d *PathDecoder) decodeReferenceTargetsForBody(body hcl.Body, parentBlock *
 				DefRangePtr: blk.DefRange.Ptr(),
 				RangePtr:    blk.Range.Ptr(),
 				Name:        bSchema.Address.FriendlyName,
+				ScopedOnly:  bSchema.Address.ScopedOriginsOnly,
 			}
 			refs = append(refs, ref)
 		}
 
 		if bSchema.Address.AsTypeOf != nil {
-			refs = append(refs, referenceAsTypeOf(blk.Block, blk.Range.Ptr(), bSchema, addr)...)
+			for _, ref := range referenceAsTypeOf(blk.Block, blk.Range.Ptr(), bSchema, addr) {
+				ref.ScopedOnly = bSchema.Address.ScopedOriginsOnly
+				refs = append(refs, ref)
+			}
 		}
 
 		var bodyRef reference.Target

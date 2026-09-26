@@ -1165,6 +1165,50 @@ func TestCollectReferenceOrigins_hcl_unknownRefs(t *testing.T) {
 			reference.Origins{}, // Empty - current behavior preserved
 		},
 		{
+			"unknown attribute next to a nested block",
+			&schema.BodySchema{
+				Blocks: map[string]*schema.BlockSchema{
+					"resource": {
+						Labels: []*schema.LabelSchema{{Name: "type"}, {Name: "name"}},
+						Body: &schema.BodySchema{
+							Extensions: &schema.BodyExtensions{
+								UnknownRefs: true,
+							},
+							Blocks: map[string]*schema.BlockSchema{
+								"lifecycle": {Body: &schema.BodySchema{
+									Attributes: map[string]*schema.AttributeSchema{
+										"create_before_destroy": {Constraint: schema.LiteralType{Type: cty.Bool}},
+									},
+								}},
+							},
+						},
+					},
+				},
+			},
+			`resource "terraform_data" "x" {
+  input = var.a
+  lifecycle {
+    create_before_destroy = true
+  }
+}`,
+			reference.Origins{
+				reference.LocalOrigin{
+					Addr: lang.Address{
+						lang.RootStep{Name: "var"},
+						lang.AttrStep{Name: "a"},
+					},
+					Constraints: reference.OriginConstraints{
+						{OfType: cty.DynamicPseudoType},
+					},
+					Range: hcl.Range{
+						Filename: "test.tf",
+						Start:    hcl.Pos{Line: 2, Column: 11, Byte: 42},
+						End:      hcl.Pos{Line: 2, Column: 16, Byte: 47},
+					},
+				},
+			},
+		},
+		{
 			"unknown block with UnknownRefs enabled",
 			&schema.BodySchema{
 				Extensions: &schema.BodyExtensions{
@@ -1211,6 +1255,72 @@ func TestCollectReferenceOrigins_hcl_unknownRefs(t *testing.T) {
 
 			if diff := cmp.Diff(tc.expectedOrigins, origins, ctydebug.CmpOptions); diff != "" {
 				t.Fatalf("mismatched reference origins: %s", diff)
+			}
+		})
+	}
+}
+
+func TestCollectReferenceOrigins_hcl_earlyEvalRefs(t *testing.T) {
+	backendSchema := func(ext *schema.BodyExtensions) *schema.BodySchema {
+		return &schema.BodySchema{
+			Blocks: map[string]*schema.BlockSchema{
+				"backend": {
+					Labels: []*schema.LabelSchema{{Name: "type"}},
+					Body: &schema.BodySchema{
+						Extensions: ext,
+						Attributes: map[string]*schema.AttributeSchema{
+							"path": {Constraint: schema.LiteralType{Type: cty.String}, IsOptional: true},
+						},
+						Blocks: map[string]*schema.BlockSchema{
+							"assume_role": {Body: &schema.BodySchema{
+								Attributes: map[string]*schema.AttributeSchema{
+									"role_arn": {Constraint: schema.LiteralType{Type: cty.String}, IsOptional: true},
+								},
+							}},
+						},
+					},
+				},
+			},
+		}
+	}
+	cfg := `backend "s3" {
+  path = "${local.dir}/state"
+  assume_role {
+    role_arn = var.role
+  }
+}
+`
+	testCases := []struct {
+		name     string
+		schema   *schema.BodySchema
+		expected []string
+	}{
+		{"literal attributes are not origins", backendSchema(nil), []string{}},
+		{"literal attributes evaluated early, nested blocks too", backendSchema(&schema.BodyExtensions{EarlyEvalRefs: true}),
+			[]string{"local.dir 2:13-2:22", "var.role 4:16-4:24"}},
+	}
+	for i, tc := range testCases {
+		t.Run(fmt.Sprintf("%d-%s", i, tc.name), func(t *testing.T) {
+			f, diags := hclsyntax.ParseConfig([]byte(cfg), "test.tf", hcl.InitialPos)
+			if diags.HasErrors() {
+				t.Fatal(diags)
+			}
+			d := testPathDecoder(t, &PathContext{
+				Schema: tc.schema,
+				Files:  map[string]*hcl.File{"test.tf": f},
+			})
+			origins, err := d.CollectReferenceOrigins()
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]string, 0, len(origins))
+			for _, origin := range origins {
+				lo := origin.(reference.LocalOrigin)
+				got = append(got, fmt.Sprintf("%s %d:%d-%d:%d", lo.Addr, lo.Range.Start.Line, lo.Range.Start.Column,
+					lo.Range.End.Line, lo.Range.End.Column))
+			}
+			if diff := cmp.Diff(tc.expected, got); diff != "" {
+				t.Fatalf("unexpected origins: %s", diff)
 			}
 		})
 	}

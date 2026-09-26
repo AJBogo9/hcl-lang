@@ -56,6 +56,10 @@ type Target struct {
 	Description lang.MarkupContent
 
 	NestedTargets Targets
+
+	// ScopedOnly makes the target match only origins constrained to its
+	// ScopeId (see schema.BlockAddrSchema.ScopedOriginsOnly).
+	ScopedOnly bool
 }
 
 // rangeOverlaps is a copy of hcl.Range.Overlaps
@@ -90,6 +94,7 @@ func (ref Target) Copy() Target {
 		Name:                   ref.Name,
 		Description:            ref.Description,
 		NestedTargets:          ref.NestedTargets.Copy(),
+		ScopedOnly:             ref.ScopedOnly,
 	}
 }
 
@@ -165,7 +170,15 @@ func (ref Target) IsConvertibleToType(typ cty.Type) bool {
 }
 
 func (target Target) Matches(origin MatchableOrigin) bool {
-	originAddr, localOriginAddr := origin.Address(), origin.Address()
+	if target.ScopedOnly && !constrainedToScope(origin.OriginConstraints(), target.ScopeId) {
+		return false
+	}
+	addr := origin.Address()
+	if target.matchesElementOf(addr, origin.OriginConstraints()) {
+		return true
+	}
+
+	originAddr, localOriginAddr := addr, addr
 
 	matchesCons := false
 
@@ -238,4 +251,52 @@ func (target Target) matchedAddrLen(origin MatchableOrigin) int {
 		n = l
 	}
 	return n
+}
+
+// matchesElementOf reports whether the origin reads an element of the
+// target through an index, such as var.names[0] (or var.subnets[0].id)
+// for a variable of type list(object), which the address alone does not
+// match unless the target is type-unaware. The origin's type constraint
+// applies to the element, not to the target, so only its scope is
+// checked.
+func (target Target) matchesElementOf(addr lang.Address, cons OriginConstraints) bool {
+	n := len(target.Addr)
+	if n == 0 || len(addr) <= n || !isIndexableType(target.Type) {
+		return false
+	}
+	if _, ok := addr[n].(lang.IndexStep); !ok {
+		return false
+	}
+	if !target.Addr.Equals(addr.FirstSteps(uint(n))) {
+		return false
+	}
+	if len(cons) == 0 {
+		return true
+	}
+	for _, c := range cons {
+		if target.MatchesScopeId(c.OfScopeId) {
+			return true
+		}
+	}
+	return false
+}
+
+// isIndexableType reports whether a value of the type has elements
+// that an index step reads: a list, map, tuple or object.
+func isIndexableType(typ cty.Type) bool {
+	if typ == cty.NilType || typ == cty.DynamicPseudoType {
+		return false
+	}
+	return typ.IsListType() || typ.IsMapType() || typ.IsTupleType() || typ.IsObjectType()
+}
+
+// constrainedToScope reports whether one of the constraints names the
+// scope.
+func constrainedToScope(cons OriginConstraints, scopeId lang.ScopeId) bool {
+	for _, c := range cons {
+		if c.OfScopeId == scopeId {
+			return true
+		}
+	}
+	return false
 }

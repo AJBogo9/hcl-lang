@@ -6,6 +6,7 @@ package schema
 import (
 	"context"
 
+	"github.com/hashicorp/hcl-lang/lang"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -21,6 +22,11 @@ type AnyExpression struct {
 	// SkipLiteralComplexTypes avoids descending into complex literal types, such as {} and [].
 	// It might be required when AnyExpression is used in OneOf to avoid duplicates.
 	SkipLiteralComplexTypes bool
+
+	// OfScopeId, when set, is the scope of the reference which the
+	// expression is: a traversal, or a traversal with an index whose key
+	// is any expression, such as random.by_key[var.k].
+	OfScopeId lang.ScopeId
 }
 
 func (AnyExpression) isConstraintImpl() constraintSigil {
@@ -35,6 +41,7 @@ func (ae AnyExpression) Copy() Constraint {
 	return AnyExpression{
 		OfType:                  ae.OfType,
 		SkipLiteralComplexTypes: ae.SkipLiteralComplexTypes,
+		OfScopeId:               ae.OfScopeId,
 	}
 }
 

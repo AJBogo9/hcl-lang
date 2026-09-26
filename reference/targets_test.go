@@ -934,3 +934,35 @@ func TestTargets_InnermostAtPos(t *testing.T) {
 		})
 	}
 }
+
+func TestTargets_Match_resourceInstanceKey(t *testing.T) {
+	gw := lang.Address{lang.RootStep{Name: "terraform_data"}, lang.AttrStep{Name: "gw"}}
+	id := append(gw.Copy(), lang.AttrStep{Name: "id"})
+	targets := Targets{
+		{
+			Addr:    gw,
+			ScopeId: lang.ScopeId("resource"),
+			Type:    cty.Object(map[string]cty.Type{"id": cty.String}),
+			NestedTargets: Targets{
+				{Addr: id, ScopeId: lang.ScopeId("resource"), Type: cty.String},
+			},
+		},
+	}
+	testCases := []struct {
+		name string
+		addr lang.Address
+		want lang.Address
+	}{
+		{"count index", lang.Address{lang.RootStep{Name: "terraform_data"}, lang.AttrStep{Name: "gw"}, lang.IndexStep{Key: cty.NumberIntVal(0)}, lang.AttrStep{Name: "id"}}, id},
+		{"splat or dynamic key", lang.Address{lang.RootStep{Name: "terraform_data"}, lang.AttrStep{Name: "gw"}, lang.IndexStep{Key: cty.DynamicVal}, lang.AttrStep{Name: "id"}}, id},
+		{"instance", lang.Address{lang.RootStep{Name: "terraform_data"}, lang.AttrStep{Name: "gw"}, lang.IndexStep{Key: cty.StringVal("a")}}, gw},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			matched, ok := targets.Match(LocalOrigin{Addr: tc.addr, Constraints: OriginConstraints{{OfType: cty.DynamicPseudoType}}})
+			if !ok || len(matched) != 1 || !matched[0].Addr.Equals(tc.want) {
+				t.Fatalf("expected %s, got %v", tc.want, matched)
+			}
+		})
+	}
+}
