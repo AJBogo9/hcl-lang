@@ -55,6 +55,10 @@ func (ref Reference) CompletionAtPos(ctx context.Context, pos hcl.Pos) []lang.Ca
 			ob := outerBlock.Body.(*hclsyntax.Body)
 			outerBodyRng = ob.Range()
 		}
+	} else if attr := rootAttributeAtPos(rootBody, pos); attr != nil {
+		// A top-level attribute (such as inputs in a Terragrunt file)
+		// may refer to anything in the file but itself.
+		outerBodyRng = attr.SrcRange
 	}
 
 	if isEmptyExpression(ref.expr) {
@@ -133,4 +137,15 @@ func (ref Reference) CompletionAtPos(ctx context.Context, pos hcl.Pos) []lang.Ca
 		return nil
 	})
 	return candidates
+}
+
+// rootAttributeAtPos returns the attribute of the root body which holds
+// pos, if any.
+func rootAttributeAtPos(body *hclsyntax.Body, pos hcl.Pos) *hclsyntax.Attribute {
+	for _, attr := range body.Attributes {
+		if attr.SrcRange.ContainsPos(pos) || attr.SrcRange.End == pos {
+			return attr
+		}
+	}
+	return nil
 }
