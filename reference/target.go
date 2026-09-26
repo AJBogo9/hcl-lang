@@ -29,6 +29,12 @@ type Target struct {
 	// where count is declared (and extension enabled)
 	TargetableFromRangePtr *hcl.Range
 
+	// TargetableFromRanges, when not empty, restricts matching to origins
+	// within one of the ranges, by either address. It lets one path hold
+	// targets that are in scope only in parts of a file, e.g. the objects
+	// of the module which a run block of a test file runs.
+	TargetableFromRanges []hcl.Range
+
 	// ScopeId provides scope for matching/filtering
 	// (in addition to Type & Addr/LocalAddr).
 	//
@@ -87,6 +93,7 @@ func (ref Target) Copy() Target {
 		Addr:                   ref.Addr,
 		LocalAddr:              ref.LocalAddr,
 		TargetableFromRangePtr: copyHclRangePtr(ref.TargetableFromRangePtr),
+		TargetableFromRanges:   copyHclRanges(ref.TargetableFromRanges),
 		ScopeId:                ref.ScopeId,
 		RangePtr:               copyHclRangePtr(ref.RangePtr),
 		DefRangePtr:            copyHclRangePtr(ref.DefRangePtr),
@@ -96,6 +103,27 @@ func (ref Target) Copy() Target {
 		NestedTargets:          ref.NestedTargets.Copy(),
 		ScopedOnly:             ref.ScopedOnly,
 	}
+}
+
+func copyHclRanges(rngs []hcl.Range) []hcl.Range {
+	if rngs == nil {
+		return nil
+	}
+	return append([]hcl.Range{}, rngs...)
+}
+
+// targetableFrom reports whether an origin in rng may match the target,
+// as TargetableFromRanges restricts it.
+func (target Target) targetableFrom(rng hcl.Range) bool {
+	if len(target.TargetableFromRanges) == 0 {
+		return true
+	}
+	for _, from := range target.TargetableFromRanges {
+		if rangeOverlaps(from, rng) {
+			return true
+		}
+	}
+	return false
 }
 
 func copyHclRangePtr(rng *hcl.Range) *hcl.Range {
@@ -171,6 +199,9 @@ func (ref Target) IsConvertibleToType(typ cty.Type) bool {
 
 func (target Target) Matches(origin MatchableOrigin) bool {
 	if target.ScopedOnly && !constrainedToScope(origin.OriginConstraints(), target.ScopeId) {
+		return false
+	}
+	if !target.targetableFrom(origin.OriginRange()) {
 		return false
 	}
 	addr := origin.Address()
