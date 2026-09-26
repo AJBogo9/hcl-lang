@@ -291,39 +291,27 @@ func (refs Targets) InnermostAtPos(file string, pos hcl.Pos) (Targets, bool) {
 		innermostTargets = append(innermostTargets, target)
 	}
 
-	return narrowestTargets(innermostTargets, file, pos), len(innermostTargets) > 0
+	return declaredAtPos(innermostTargets, file, pos), len(innermostTargets) > 0
 }
 
-// narrowestTargets keeps the targets with the shortest range, so that on
-// the for_each argument of a resource the targets are each.key and
-// each.value, not the resource block which also contains the position.
-// A target whose declaration range (such as a block header) holds the
-// position counts by that range.
-func narrowestTargets(targets Targets, file string, pos hcl.Pos) Targets {
+// declaredAtPos keeps the targets whose declaration range holds the
+// position, when there are any. On the for_each name, where the reference
+// count lens of each.key and each.value places its position, the targets
+// are then those and not also the resource block around them, so that the
+// lens click lists what the lens counts. Elsewhere in the for_each
+// argument the enclosing block stays a target too.
+func declaredAtPos(targets Targets, file string, pos hcl.Pos) Targets {
 	if len(targets) < 2 {
 		return targets
 	}
-	size := func(t Target) int {
-		rng := t.RangePtr
+	declared := make(Targets, 0, len(targets))
+	for _, t := range targets {
 		if t.DefRangePtr != nil && t.DefRangePtr.Filename == file && t.DefRangePtr.ContainsPos(pos) {
-			rng = t.DefRangePtr
-		}
-		return rng.End.Byte - rng.Start.Byte
-	}
-	min := -1
-	for _, t := range targets {
-		if t.RangePtr == nil {
-			return targets
-		}
-		if n := size(t); min < 0 || n < min {
-			min = n
+			declared = append(declared, t)
 		}
 	}
-	narrowest := make(Targets, 0, len(targets))
-	for _, t := range targets {
-		if size(t) == min {
-			narrowest = append(narrowest, t)
-		}
+	if len(declared) == 0 {
+		return targets
 	}
-	return narrowest
+	return declared
 }

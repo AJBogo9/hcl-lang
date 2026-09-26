@@ -649,7 +649,7 @@ func TestTargets_OutermostInFile(t *testing.T) {
 	}
 }
 
-func TestTargets_InnermostAtPos_narrowest(t *testing.T) {
+func TestTargets_InnermostAtPos_forEach(t *testing.T) {
 	rng := func(start, end int) *hcl.Range {
 		return &hcl.Range{
 			Filename: "test.tf",
@@ -662,13 +662,17 @@ func TestTargets_InnermostAtPos_narrowest(t *testing.T) {
 		RangePtr:    rng(0, 200),
 		DefRangePtr: rng(0, 18),
 	}
+	// as forEachReferenceTargets declares them: the whole argument, and
+	// its name as the declaration
 	eachKey := Target{
-		Addr:     lang.Address{lang.RootStep{Name: "each"}, lang.AttrStep{Name: "key"}},
-		RangePtr: rng(22, 45),
+		Addr:        lang.Address{lang.RootStep{Name: "each"}, lang.AttrStep{Name: "key"}},
+		RangePtr:    rng(22, 45),
+		DefRangePtr: rng(22, 30),
 	}
 	eachValue := Target{
-		Addr:     lang.Address{lang.RootStep{Name: "each"}, lang.AttrStep{Name: "value"}},
-		RangePtr: rng(22, 45),
+		Addr:        lang.Address{lang.RootStep{Name: "each"}, lang.AttrStep{Name: "value"}},
+		RangePtr:    rng(22, 45),
+		DefRangePtr: rng(22, 30),
 	}
 	targets := Targets{resource, eachKey, eachValue}
 
@@ -677,9 +681,12 @@ func TestTargets_InnermostAtPos_narrowest(t *testing.T) {
 		pos      int
 		expected Targets
 	}{
-		// the for_each argument, not the resource around it
-		{"on for_each", 25, Targets{eachKey, eachValue}},
-		// the header is smaller than for_each, but only counts on it
+		// where the reference count lens of each.key and each.value
+		// asks, not the resource around it
+		{"on the for_each name", 26, Targets{eachKey, eachValue}},
+		// the rest of the argument is in the resource as well
+		{"right after the for_each name", 30, Targets{resource, eachKey, eachValue}},
+		{"on the for_each expression", 35, Targets{resource, eachKey, eachValue}},
 		{"on the header", 5, Targets{resource}},
 		{"elsewhere in the body", 100, Targets{resource}},
 	}
